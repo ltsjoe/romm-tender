@@ -40,6 +40,8 @@ is invisible at the citation site), so reach it through the page that owns the t
 - Emulator and core selection — [core-emulator-selection.md](docs/architecture/core-emulator-selection.md)
 - RetroArch/ES-DE config parsing — [config-source-parsers.md](docs/architecture/config-source-parsers.md)
 - Steam Remote Play — [steam-remote-play.md](docs/architecture/steam-remote-play.md)
+- Netplay: hosting and joining, the session note, the launch flags, what is validated in a note before it reaches a
+  command: [netplay.md](docs/architecture/netplay.md)
 - **End-user-facing behavior and UI** — setup, configuration, syncing, save-sync, BIOS, troubleshooting —
   `docs/user-guide/`
 - Dev setup, dependency management, frontend loop — `docs/contributing/`

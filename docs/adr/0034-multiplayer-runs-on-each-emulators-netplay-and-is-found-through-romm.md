@@ -1,13 +1,13 @@
 ---
-status: proposed
+status: accepted
 decided: 2026-10-25
 updated: 2026-10-25
 ---
 
 # Multiplayer runs on each emulator's own netplay, and players find a hosted game through RomM
 
-Recorded for [#1](https://github.com/ltsjoe/romm-tender/issues/1), whose `## Decisions` D1 to D5, D7 to D10, D13 and D17
-this ADR carries. The issue holds the research behind it and the smaller decisions.
+Recorded for [#1](https://github.com/ltsjoe/romm-tender/issues/1), whose `## Decisions` D1 to D5, D7 to D10, D13, D17,
+D19, D20, D22, D24 and D25 this ADR carries. The issue holds the research behind it and the smaller decisions.
 
 ## Context
 
@@ -34,13 +34,13 @@ through a place both can reach: the RomM server, libretro's public lobby, or Ste
 1. **Multiplayer is each emulator's own netplay**, for RetroArch on a deterministic core and for PPSSPP standalone, and
    for nothing else. A PS1 game whose core refuses netplay is launched on PCSX ReARMed for that session, on both sides;
    the game's chosen core is not changed.
-2. **RomM is where a guest finds a hosted game.** While a session runs, the host's Tender sends RomM activity
-   heartbeats for the ROM (`POST /api/activity/heartbeat`, RomM 5.0.0 and later) and keeps a public note on it that
-   carries what the guest needs: the emulator and core, the host's addresses, the relay session, the password. The note
-   opens with a Tender marker and a format version. A guest reads the activity feed (`GET /api/activity`) and trusts a
-   note only while its host's activity entry is live; an entry expires 90 seconds after the last heartbeat, so a host
-   that crashed stops being offered within that time. The host's Tender deletes the note when the session ends, and a
-   note left by a crash the next time it starts.
+2. **RomM is where a guest finds a hosted game.** While a session runs, the host's Tender sends RomM activity heartbeats
+   for the ROM (`POST /api/activity/heartbeat`, RomM 5.0.0 and later) and keeps a public note on it that carries what
+   the guest needs: the emulator and core, the host's addresses, the relay session, the password. The note opens with a
+   Tender marker and a format version. A guest reads the activity feed (`GET /api/activity`) and trusts a note only
+   while its host's activity entry is live; an entry expires 90 seconds after the last heartbeat, so a host that crashed
+   stops being offered within that time. The host's Tender deletes the note when the session ends, and a note left by a
+   crash the next time it starts.
 3. **The guest joins from a card on Main.** A Steam toast announces a session once, and Main shows a card per hosted
    game that carries **Join** (or **Download** first, for a game not on the device). Join goes through the same launch
    code as the play row. This is a deliberate exception to "One home per action" in
@@ -52,11 +52,30 @@ through a place both can reach: the RomM server, libretro's public lobby, or Ste
 5. **A RetroArch guest never reads or writes its own save file during a session.** On connecting, RetroArch copies the
    host's save RAM over the guest's (`network/netplay/netplay_frontend.c`), and would otherwise write it into the
    guest's save file, which Tender would then upload over the guest's save in RomM. The guest's launch carries
-   `--sram-mode=noload-nosave`. A PPSSPP ad hoc session is different: each player runs their own game on their own
-   save, so both sides save and sync as in any other game.
+   `--sram-mode=noload-nosave`. A PPSSPP ad hoc session is different: each player runs their own game on their own save,
+   so both sides save and sync as in any other game.
 6. **A netplay launch is a launch path of its own.** It writes the one-off command, launches, and puts the normal
    command back when the game exits. The one-off command is never recorded in `applied_launch_options`, so the six
    recorded-state writer sites stay six.
+
+## On Tender 0.33.0
+
+The plan was first written against upstream's later, standalone Tender (ADR 0044 on the fork's `main`). This branch
+builds it on 0.33.0, the last release that runs as a Decky Loader plugin (#1 D19), which changes four things:
+
+- **RomM 5.0.0** is required for Host and Join, the release that added the activity feed; 0.33.0's own floor stays 4.9.0
+  (D20).
+- **A RomM device is registered for a session** when none is, which in 0.33.0 happens only while save sync is off, and
+  save sync stays off (D22). Registering one also starts the playtime read that every registered device gets.
+- **A PS1 host session on PCSX ReARMed saves where the game's own core does**: the appended config points
+  `savefile_directory` at that folder, so RetroArch's sort-saves-by-core setting cannot move the memory card (D24).
+- **The launch funnel moves into `src/utils/`** so the play button, Host and the Main card's Join share it (D25).
+
+Two rules came out of building it. Every appended RetroArch config sets `config_save_on_exit = "false"`, because
+RetroArch otherwise writes appended settings into `retroarch.cfg` when it exits and the relay, the public announce and
+the save folder would stick for every later game. And every note field is checked with `fullmatch`: a pattern anchored
+with `$` and run with `match` also accepts a value ending in a newline, which a shell reads as the start of a new
+command.
 
 ## Considered options
 

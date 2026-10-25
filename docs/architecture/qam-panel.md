@@ -548,10 +548,11 @@ Cancel Sync, then the transient line a just-ended run leaves behind (and a cance
 those the three notices that carry a button (the RetroArch input driver, the save-file sorting, a run paused on the
 session budget) and, last, the data-location notice — last because the plugin is running either way and only where its
 data ends up is outstanding; it carries a button only in its choice variant, and that button opens a modal rather than a
-page; the download summary (up to two rows, an overflow count, a completed count, View All); the menu — Sync, Library,
-Settings, Data Management. **Those last three blocks carry no section title at all** — what separates one from the next
-is a hairline (`BlockSeparator`), which costs one pixel of height where a heading would cost a whole row. The layout
-study it was chosen from is [main-layouts.html](../assets/main-layouts.html).
+page; the hosted multiplayer sessions, a card each, only while another user of the same RomM server hosts one; the
+download summary (up to two rows, an overflow count, a completed count, View All); the menu — Sync, Library, Settings,
+Data Management. **Those last four blocks carry no section title at all** — what separates one from the next is a
+hairline (`BlockSeparator`), which costs one pixel of height where a heading would cost a whole row. The layout study it
+was chosen from is [main-layouts.html](../assets/main-layouts.html).
 
 **The menu is the navigation that is always there — complete, and always in the same place. The status rows state and do
 nothing. The single exception is one conditional slot that exists only while the Sync page has something to report; a
@@ -630,6 +631,31 @@ numbers; what it keys on the run's end for is its own three reads — the run li
 reading all describe the run that just stopped — taken on a stop that carries a **terminal stage** rather than through a
 second announcement of it. The stage is what separates a run's end from that page retracting its own optimistic frame
 after a preview: both stop the store's `running`, and only one of them ended a run.
+
+**Hosted multiplayer sessions** sit between the status block and the download summary: one card per session another user
+of the same RomM server is hosting, and nothing at all while there is none. The cards come from a poller
+(`src/utils/hostedSessions.ts`) that `index.tsx` starts at plugin load and stops at unload. It asks
+`list_hosted_sessions` every 30 seconds, panel open or not and a game running or not, so the Steam toast that announces
+a session ("sam is hosting Crash Team Racing") reaches a player who is already in a game. The toast is raised once per
+session key, the first time a poll sees it. A poll that establishes nothing (a RomM server older than 5.0.0, an
+unreachable server, a failed call) says nothing and leaves no card standing, because a card could only offer a Join that
+cannot work. Each card is a focusable row naming the host and the game, with what the session's state allows under it:
+
+| State            | The card says                                      | Button                                           |
+| ---------------- | -------------------------------------------------- | ------------------------------------------------ |
+| `join`           | the host and the game                              | **Join**                                         |
+| `download`       | the game has to be downloaded first                | **Download**, reading Downloading… while it runs |
+| `missing_core`   | RetroDECK on this device lacks the session's core  | none                                             |
+| `not_in_library` | the game is not in Tender's library on this device | none                                             |
+
+**Join** is the play row's launch: it runs the same launch funnel (`src/utils/launchFunnel.ts`), so the pre-launch gate
+comes first, then `prepare_join_session`, then the session's one-off command written onto the shortcut and `RunGame`. It
+is the one action on Main whose home is the card itself rather than a page (below, under One home per action). Its
+admission is the plugin's rather than the panel's, so closing the Quick Access panel while the pre-launch sync runs does
+not cancel the join. **Download** starts the same `start_download` the game page's Download does; a download that needs
+a choice about files already on disk is sent to the game's page, whose dialogs make that choice. The card reads Join
+once a poll sees the game installed, and the poller asks again as soon as a download a card waits on completes rather
+than up to 30 seconds later. How a session is found and joined is [netplay.md](netplay.md).
 
 **Steam memory is not on Main.** The reading and the session-budget card are on the Sync page, at the home of the button
 they are about; what stays on Main is the notice naming a paused run and pointing at it. Main reads the session-budget
@@ -1333,6 +1359,13 @@ menu entry.
 | Migrate the save-file sorting      | Settings › Save Sync   | Settings › Save Sync; Main shows the notice  |
 | Pause or cancel a download         | Downloads              | Downloads                                    |
 | Clean up removed RomM games        | Data Management, modal | Data Management, as a page                   |
+| Join a hosted multiplayer session  | Main, on its card      | Main, on its card: the deliberate exception  |
+
+**Join is the deliberate exception** to one home per action ([#1](https://github.com/ltsjoe/romm-tender/issues/1) D5).
+Everything else Main offers is a door to the action's home; Join is answered on the session's card, for fewer presses. A
+card that only opened the game's page, with Join on its play row, kept the rule and was not chosen. It is the same
+launch, not a copy of it: the card and the play row both go through `src/utils/launchFunnel.ts`. Host multiplayer is not
+on Main at all; it sits on the game page's play row, in the menu beside Play.
 
 ## Sequence
 
