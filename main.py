@@ -185,6 +185,7 @@ class Plugin:
         self._session_lifecycle_service = services["session_lifecycle_service"]
         self._game_process_service = services["game_process_service"]
         self._relaunch_options_resolver = services["relaunch_options_resolver"]
+        self._netplay_service = services["netplay_service"]
 
         # ── 4b. Legacy credential migration ─────────────────────────────────
         # Upgrade a stored-password install to a Client API Token. The
@@ -204,6 +205,7 @@ class Plugin:
         self._artwork_service.prune_orphaned_staging_artwork()
         self._artwork_service.prune_orphaned_cover_cache()
         self._download_service.cleanup_leftover_tmp_files()
+        self._netplay_service.start_leftover_cleanup()
 
         # ── 6. Background tasks ─────────────────────────────────────────────
         self._migration_service.detect_save_sort_change()
@@ -215,6 +217,7 @@ class Plugin:
         await self._download_service.shutdown()
         await self._migration_service.shutdown()
         await self._session_lifecycle_service.shutdown()
+        await self._netplay_service.shutdown()
         await self._cancel_playtime_flush_tasks()
         decky.logger.info("Tender pluginunloaded")
 
@@ -659,6 +662,46 @@ class Plugin:
     async def finalize_game_session(self, rom_id):
         result = await self._session_lifecycle_service.finalize(rom_id)
         return asdict(result)
+
+    # ── Multiplayer delegation to NetplayService ─────────────
+
+    async def get_netplay_capability(self, rom_id):
+        return await self._netplay_service.get_capability(int(rom_id))
+
+    @migration_blocked
+    @prune_active_blocked
+    async def start_host_session(self, rom_id):
+        """Start hosting a ROM for multiplayer; answer its one-off launch command.
+
+        The lease covers the frontend's write of that command onto the shortcut.
+        The command is never recorded as the ROM's applied launch options: the
+        frontend puts the normal command back once the game exits.
+        """
+        result = await self._netplay_service.start_host_session(int(rom_id))
+        if result.get("success"):
+            result["prune_lease_token"] = await acquire_prune_conflict_lease(self, "netplay_launch")
+        return result
+
+    async def end_host_session(self):
+        return await self._netplay_service.end_host_session()
+
+    async def list_hosted_sessions(self):
+        return await self._netplay_service.list_hosted_sessions()
+
+    @migration_blocked
+    @prune_active_blocked
+    async def prepare_join_session(self, rom_id, host_user_id, started_at):
+        """Prepare to join another user's session; answer the one-off launch command.
+
+        Lease-bearing for the same reason as ``start_host_session``.
+        """
+        result = await self._netplay_service.prepare_join_session(int(rom_id), int(host_user_id), str(started_at))
+        if result.get("success"):
+            result["prune_lease_token"] = await acquire_prune_conflict_lease(self, "netplay_launch")
+        return result
+
+    async def end_join_session(self):
+        return await self._netplay_service.end_join_session()
 
     # ── Download delegation to DownloadService ──────────────
 

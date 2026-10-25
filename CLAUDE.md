@@ -40,6 +40,8 @@ is invisible at the citation site), so reach it through the page that owns the t
 - Emulator and core selection — [core-emulator-selection.md](docs/architecture/core-emulator-selection.md)
 - RetroArch/ES-DE config parsing — [config-source-parsers.md](docs/architecture/config-source-parsers.md)
 - Steam Remote Play — [steam-remote-play.md](docs/architecture/steam-remote-play.md)
+- Netplay: hosting and joining, the session note, the launch flags, what is validated in a note before it reaches a
+  command: [netplay.md](docs/architecture/netplay.md)
 - **End-user-facing behavior and UI** — setup, configuration, syncing, save-sync, BIOS, troubleshooting —
   `docs/user-guide/`
 - Dev setup, dependency management, frontend loop — `docs/contributing/`
@@ -118,14 +120,15 @@ locally with `mise run docs`.
 - **RomM minimum version**: Requires RomM >= 4.9.0, hard-rejected in `test_connection()` (`_MIN_REQUIRED_VERSION` in
   `main.py`) — the plugin is inert until the server is updated.
 - **User-Agent on outgoing HTTP**: SteamGridDB **and** RomM behind Cloudflare Tunnel reject the default `Python-urllib`
-  UA with 403. Both adapters that talk to a server off this machine (`adapters/romm/http.py`, `adapters/steamgriddb.py`)
-  take a `user_agent: str` ctor param; bootstrap threads `<package name>/<version>`, both halves from one `package.json`
-  read — no hardcoded name and no hardcoded version, so it and the recovery root come from that one read rather than
-  from two literals that could drift (the root additionally through `sanitize_package_name`, which is the identity for a
-  name shaped like this one). Those two are everything `package.json`'s `name` reaches; the folder the plugin ships as
-  is decided by the release workflow's build directory, not by this file. A missing or malformed `package.json` degrades
-  to the metadata adapter's documented fallback, `decky-plugin/0.0.0`. `adapters/renderer_gc.py` also speaks HTTP — to
-  Steam's debugger on `localhost` — and takes none.
+  UA with 403. The three adapters that talk to a server off this machine (`adapters/romm/http.py`,
+  `adapters/steamgriddb.py`, and `adapters/libretro_lobby.py` for libretro's netplay lobby) take a `user_agent: str`
+  ctor param; bootstrap threads `<package name>/<version>`, both halves from one `package.json` read — no hardcoded name
+  and no hardcoded version, so it and the recovery root come from that one read rather than from two literals that could
+  drift (the root additionally through `sanitize_package_name`, which is the identity for a name shaped like this one).
+  Those two are everything `package.json`'s `name` reaches; the folder the plugin ships as is decided by the release
+  workflow's build directory, not by this file. A missing or malformed `package.json` degrades to the metadata adapter's
+  documented fallback, `decky-plugin/0.0.0`. `adapters/renderer_gc.py` also speaks HTTP — to Steam's debugger on
+  `localhost` — and takes none.
 - **Large payloads**: Never send bulk base64 through `decky.emit()` — the WebSocket bridge has size limits. Use per-item
   callables, and chunk bulk lists (the library apply emits shortcuts in batches; the metadata cache loads page-by-page).
 - **No `BIsModOrShortcut` bypass**: the bypass counter was removed deliberately. Shortcuts return `true` (natural

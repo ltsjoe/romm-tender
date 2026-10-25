@@ -841,6 +841,35 @@ class RommHttpAdapter:
 
         return self.with_retry(_do_json_request)
 
+    def delete(self, path: str) -> dict[str, Any]:
+        """Send an authenticated DELETE to the RomM API (with retry).
+
+        Returns ``{}`` for a 204 or an empty body, parsed JSON otherwise. A
+        repeat after a lost response answers RomM's entity 404 for what the
+        first attempt already removed, which a caller reads as already gone.
+        On an HTTP error the FastAPI ``detail`` rides on the typed error, and a
+        404 is an entity verdict only where RomM proved it.
+        """
+        url = self._settings["romm_url"].rstrip("/") + path
+
+        def _do_delete():
+            req = urllib.request.Request(url, method="DELETE")
+            self._apply_default_headers(req)
+            try:
+                with self._urlopen(req, timeout=30) as resp:
+                    if resp.status == 204:
+                        return {}
+                    raw = resp.read().decode()
+                    return json.loads(raw) if raw else {}
+            except RommApiError:
+                raise
+            except urllib.error.HTTPError as exc:
+                raise self._translate_with_detail(exc, url, "DELETE") from exc
+            except Exception as exc:
+                raise self.translate_http_error(exc, url, "DELETE") from exc
+
+        return self.with_retry(_do_delete)
+
     def post_json(self, path: str, data):
         """POST JSON to RomM API, return parsed response."""
         return self.json_request(path, data, method="POST")

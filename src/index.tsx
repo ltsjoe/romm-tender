@@ -29,10 +29,7 @@ import {
   applyAllMetadata,
 } from "./patches/metadataPatches";
 import { registerLaunchInterceptor, unregisterLaunchInterceptor } from "./utils/launchInterceptor";
-import { showCoreChangeModal } from "./components/CoreChangeModal";
-import { handleConflicts } from "./components/SyncConflictModal";
-import { showOfflineDriftModal } from "./components/OfflineDriftModal";
-import { showFallbackLaunchModal } from "./components/FallbackLaunchModal";
+import { MODAL_LAUNCH_PROMPTS } from "./components/launchPrompts";
 import { hasAnySaveConflict } from "./utils/saveStatus";
 import {
   getAppIdRomIdMap,
@@ -64,7 +61,10 @@ import { resetSyncDelta, recordSyncRemoved, getSyncDelta } from "./utils/syncDel
 import { attachRunUnitsMirror, seedRunUnits } from "./utils/runUnitsStore";
 import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { setVersionError, setServerRetryProgress } from "./utils/connectionState";
-import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
+import { initSessionManager, destroySessionManager, isSessionActive } from "./utils/sessionManager";
+import { isAppRunning } from "./utils/runningApps";
+import { resumeNetplayLaunchAtLoad, settleNetplayLaunchAtLoad } from "./utils/netplayLaunch";
+import { startHostedSessionPolling, stopHostedSessionPolling } from "./utils/hostedSessions";
 import { findOutermostScrollParent } from "./utils/scrollHelpers";
 import { ENTRY_FOCUS_DELAY_MS, pageEntryStop, placeEntryFocus } from "./utils/entryFocus";
 import { collapseQamOnDismount } from "./utils/qamExpansion";
@@ -361,12 +361,11 @@ export default definePlugin(() => {
   mountPruneLeasePlugin();
   const pluginAdmission = capturePruneLeaseAdmission();
   registerGameDetailPatch();
-  registerLaunchInterceptor({
-    confirmCoreChange: showCoreChangeModal,
-    resolveConflicts: handleConflicts,
-    askOfflineDrift: showOfflineDriftModal,
-    confirmFallbackLaunch: showFallbackLaunchModal,
-  });
+  registerLaunchInterceptor(MODAL_LAUNCH_PROMPTS);
+  // Before the first launch this frontend can start, so the session it may end
+  // is never one started here.
+  detach(resumeNetplayLaunchAtLoad());
+  startHostedSessionPolling();
 
   // Load metadata cache, register store patches, and populate RomM app ID set.
   // Retries with backoff if the backend isn't ready yet (e.g. boot without network).
@@ -582,6 +581,12 @@ export default definePlugin(() => {
       } catch (e) {
         logError(`Failed to init save sync: ${e}`);
       }
+      // After the session manager's adoption has decided which games are still
+      // running, so the netplay launch taken over at load is ended only where its
+      // game is gone.
+      await settleNetplayLaunchAtLoad((appId, romId) => isSessionActive(romId) || isAppRunning(appId)).catch(
+        (e: unknown) => logError(`Failed to settle a leftover netplay launch: ${e}`),
+      );
     })(),
   );
 
@@ -1122,6 +1127,7 @@ export default definePlugin(() => {
       collapseQamOnDismount();
       syncContinuationController.abort();
       destroySessionManager();
+      stopHostedSessionPolling();
       unregisterLaunchInterceptor();
       unregisterGameDetailPatch();
       unregisterMetadataPatches();

@@ -352,6 +352,57 @@ export type RelaunchOptionsResult =
   | { success: false; reason: string; message: string }
   | null;
 export const getRomRelaunchOptions = callable<[number], RelaunchOptionsResult>("get_rom_relaunch_options");
+/** Which netplay a session runs: RetroArch's own, or PPSSPP's ad hoc mode. */
+export type NetplayKind = "retroarch" | "ppsspp";
+/**
+ * Whether a ROM can be hosted for multiplayer. An unavailable ROM carries the
+ * `reason` slug and a sentence saying why (`unsupported` for a RomM server
+ * older than 5.0.0).
+ */
+export interface NetplayCapability {
+  success: true;
+  available: boolean;
+  kind: NetplayKind | null;
+  reason: string | null;
+  message: string | null;
+}
+export const getNetplayCapability = callable<[number], NetplayCapability>("get_netplay_capability");
+/**
+ * A started host session or a prepared join: the one-off launch command to
+ * write on the shortcut before launching, never recorded as its normal one.
+ * `reason: "reauth_required"` asks the user to sign in again with a username
+ * and password.
+ */
+export type NetplayLaunchResult =
+  | {
+      success: true;
+      rom_id: number;
+      app_id: number;
+      kind: NetplayKind;
+      launch_options: string;
+      connection?: "direct" | "relay";
+      prune_lease_token: string;
+    }
+  | { success: false; reason: string; message: string };
+export const startHostSession = callable<[number], NetplayLaunchResult>("start_host_session");
+export const endHostSession = callable<[], { success: true; note_removed: boolean }>("end_host_session");
+/** One live session another user hosts, and what this device can do about it. */
+export interface HostedSession {
+  key: string;
+  rom_id: number;
+  rom_name: string;
+  app_id: number | null;
+  host_user_id: number;
+  host_username: string;
+  kind: NetplayKind;
+  started_at: string;
+  state: "join" | "download" | "missing_core" | "not_in_library";
+}
+export type HostedSessionsResult =
+  { success: true; sessions: HostedSession[] } | { success: false; reason: string; message: string };
+export const listHostedSessions = callable<[], HostedSessionsResult>("list_hosted_sessions");
+export const prepareJoinSession = callable<[number, number, string], NetplayLaunchResult>("prepare_join_session");
+export const endJoinSession = callable<[], { success: true }>("end_join_session");
 /**
  * `stop_running_game` result. On success the counts describe what the backend's
  * stop ladder did to the instance running the ROM it was called for: `stopped`

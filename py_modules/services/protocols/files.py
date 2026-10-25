@@ -774,3 +774,20 @@ class SteamRecoveryStore(Protocol):
         snapshot: SteamRecoverySnapshot,
         claims: dict[str, SourceClaim],
     ) -> MutationOutcome: ...
+
+
+class NetplayConfigStore(Protocol):
+    """File-store seam for the config files a multiplayer session appends.
+
+    The files sit in a folder of Tender's own that RetroDECK's sandbox can read,
+    and a name is a bare file name in it — never a path. Raises ``ValueError``
+    for a name that is not one, and ``OSError`` where the write fails.
+    """
+
+    def write_config(self, name: str, text: str) -> str:
+        """Write *text* as config *name*, replacing an earlier one; return the path the sandbox sees."""
+        ...
+
+    def remove_config(self, name: str) -> None:
+        """Remove config *name*; one that is not there is already removed."""
+        ...

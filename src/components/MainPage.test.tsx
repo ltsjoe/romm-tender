@@ -51,6 +51,7 @@ import {
 import { beginEtaRun, resetEta } from "../utils/syncEta";
 import * as syncEta from "../utils/syncEta";
 import { setDownloads } from "../utils/downloadStore";
+import { pollHostedSessions, resetHostedSessionsForTests } from "../utils/hostedSessions";
 import { resetConnectionProbeForTests } from "../utils/connectionProbe";
 import { resetSyncStatsStoreForTests } from "../utils/syncStatsStore";
 import { setLegacyInstallState } from "../utils/legacyInstallStore";
@@ -3539,6 +3540,66 @@ describe("MainPage", () => {
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
       expect(container.textContent).not.toContain(LEGACY_INSTALL_TITLE);
+    });
+  });
+  // ===========================================================================
+  // Hosted multiplayer sessions (#1 D5)
+  // ===========================================================================
+  describe("hosted sessions", () => {
+    const hosted = {
+      key: "7:42:2026-10-25T20:00:00+00:00",
+      rom_id: 42,
+      rom_name: "Crash Team Racing",
+      app_id: 100,
+      host_user_id: 7,
+      host_username: "sam",
+      kind: "retroarch" as const,
+      started_at: "2026-10-25T20:00:00+00:00",
+      state: "join" as const,
+    };
+
+    beforeEach(() => {
+      resetHostedSessionsForTests();
+    });
+
+    it("renders nothing when no session is hosted", async () => {
+      vi.mocked(backend.listHostedSessions).mockResolvedValue({ success: true, sessions: [] });
+      await pollHostedSessions();
+
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).not.toContain("is hosting");
+      expect(buttonByExactText(container, "Join")).toBeNull();
+    });
+
+    it("puts a card per session after the status block and before the downloads", async () => {
+      vi.mocked(backend.listHostedSessions).mockResolvedValue({ success: true, sessions: [hosted] });
+      await pollHostedSessions();
+      setDownloads([
+        {
+          rom_id: 1,
+          rom_name: "Active",
+          platform_name: "Genesis",
+          file_name: "a.bin",
+          status: "downloading",
+          progress: 50,
+          bytes_downloaded: 512,
+          total_bytes: 1024,
+          resumable: false,
+        },
+      ]);
+
+      const { container, getByText } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+
+      const card = getByText("sam is hosting");
+      const connection = getByText("Connection");
+      const viewAll = buttonByExactText(container, "View All")!;
+      const join = buttonByExactText(container, "Join")!;
+      expect(connection.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(card.compareDocumentPosition(join) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(join.compareDocumentPosition(viewAll) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
   });
 });

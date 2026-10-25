@@ -125,6 +125,7 @@ import { showAdoptUnusableModal } from "../components/AdoptUnusableModal";
 import { showAdoptVanishedModal } from "../components/AdoptVanishedModal";
 import { mountPruneLeasePlugin, releaseAllPruneLeases } from "../utils/pruneLease";
 import { resetBoundVanished, setBoundVanished } from "../utils/vanishedBinding";
+import { getNetplayLaunch, resetNetplayLaunchForTests } from "../utils/netplayLaunch";
 import type { SyncConflict, SaveStatus } from "../types";
 
 function mockCachedDetail(overrides: Partial<CachedGameDetail> = {}): void {
@@ -4425,5 +4426,147 @@ describe("CustomPlayButton — the backstop (#260)", () => {
 
     expect(vi.mocked(backend.startDownload)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
+  });
+});
+
+describe("CustomPlayButton — Host multiplayer (#1 D6)", () => {
+  const ONE_OFF_COMMAND =
+    'flatpak run net.retrodeck.retrodeck -e "%EMULATOR_RETROARCH% -L pcsx_rearmed_libretro.so --host %ROM%" "/roms/psx/game.chd"';
+  const HOSTABLE = { success: true as const, available: true, kind: "retroarch" as const, reason: null, message: null };
+  const NOT_HOSTABLE = {
+    success: true as const,
+    available: false,
+    kind: null,
+    reason: "core_not_supported",
+    message: "This game's emulator core does not support multiplayer.",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    consumeLaunchSkip(100);
+    localStorage.clear();
+    resetNetplayLaunchForTests();
+    vi.mocked(getMigrationState).mockReturnValue({ pending: false });
+    vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "default" });
+    vi.mocked(backend.checkCoreChange).mockResolvedValue({ changed: false });
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: true });
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({ success: true, message: "", synced: 0, conflicts: [] });
+    vi.mocked(backend.getNetplayCapability).mockResolvedValue(HOSTABLE);
+    vi.mocked(backend.startHostSession).mockResolvedValue({
+      success: true,
+      rom_id: 42,
+      app_id: 100,
+      kind: "retroarch",
+      launch_options: ONE_OFF_COMMAND,
+      prune_lease_token: "netplay_launch:1",
+    });
+    vi.mocked(backend.releasePruneConflictLease).mockResolvedValue({ success: true, message: "released" });
+    vi.mocked(setLaunchOptionsConfirmed).mockResolvedValue(true);
+
+    vi.stubGlobal("SteamClient", { Apps: { RunGame: vi.fn() } });
+    vi.stubGlobal("appStore", {
+      GetAppOverviewByAppID: vi.fn(() => ({ GetGameID: () => "gid-1" })),
+      allApps: [],
+    });
+  });
+
+  /** Open the play row's menu and render it on its own, returning what it holds. */
+  function openPlayMenu(container: HTMLElement): HTMLElement {
+    const chevron = container.querySelector(".romm-btn-dropdown") as HTMLElement | null;
+    if (!chevron) throw new Error("dropdown chevron not rendered");
+    act(() => {
+      chevron.click();
+    });
+    const calls = vi.mocked(showContextMenu).mock.calls;
+    const menu = calls[calls.length - 1]![0] as ReactElement;
+    return render(menu).container;
+  }
+
+  /** Render the button for an installed game and wait until its capability answer is in. */
+  async function renderPlayable(): Promise<HTMLElement> {
+    mockCachedDetail();
+    const utils = render(<CustomPlayButton appId={100} />);
+    await utils.findByText("Play");
+    await waitFor(() => expect(backend.getNetplayCapability).toHaveBeenCalledWith(42));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    return utils.container;
+  }
+
+  it("offers Host multiplayer beside Uninstall for a game that can be hosted", async () => {
+    const container = await renderPlayable();
+
+    const menu = openPlayMenu(container);
+
+    expect(within(menu).getByText("Host multiplayer")).toBeInTheDocument();
+    expect(within(menu).getByText("Uninstall")).toBeInTheDocument();
+  });
+
+  it("leaves Host multiplayer out for a game that cannot be hosted", async () => {
+    vi.mocked(backend.getNetplayCapability).mockResolvedValue(NOT_HOSTABLE);
+    const container = await renderPlayable();
+
+    const menu = openPlayMenu(container);
+
+    expect(within(menu).queryByText("Host multiplayer")).toBeNull();
+    expect(within(menu).getByText("Uninstall")).toBeInTheDocument();
+  });
+
+  it("leaves Host multiplayer out when the capability read fails", async () => {
+    vi.mocked(backend.getNetplayCapability).mockRejectedValue(new Error("bridge down"));
+    const container = await renderPlayable();
+
+    const menu = openPlayMenu(container);
+
+    expect(within(menu).queryByText("Host multiplayer")).toBeNull();
+    expect(backend.debugLog).toHaveBeenCalledWith(
+      expect.stringContaining("CustomPlayButton: multiplayer capability read failed"),
+    );
+  });
+
+  it("hosts through the launch funnel: the gate, start_host_session, the one-off command, then the game", async () => {
+    const container = await renderPlayable();
+    const menu = openPlayMenu(container);
+
+    await act(async () => {
+      within(menu).getByText("Host multiplayer").click();
+    });
+
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
+    expect(backend.preLaunchSync).toHaveBeenCalledWith(42);
+    expect(backend.startHostSession).toHaveBeenCalledWith(42);
+    expect(vi.mocked(backend.preLaunchSync).mock.invocationCallOrder[0]!).toBeLessThan(
+      vi.mocked(backend.startHostSession).mock.invocationCallOrder[0]!,
+    );
+    expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(100, ONE_OFF_COMMAND);
+    // No re-confirm: it would put the normal command back over the session's.
+    expect(backend.getRomRelaunchOptions).not.toHaveBeenCalled();
+    expect(getNetplayLaunch()).toEqual({ appId: 100, romId: 42, role: "host" });
+  });
+
+  it("asks for a fresh sign-in with a username and password when RomM refuses the permission", async () => {
+    vi.mocked(backend.startHostSession).mockResolvedValue({
+      success: false,
+      reason: "reauth_required",
+      message: "Your RomM sign-in does not allow multiplayer.",
+    });
+    const container = await renderPlayable();
+    const menu = openPlayMenu(container);
+
+    await act(async () => {
+      within(menu).getByText("Host multiplayer").click();
+    });
+
+    await waitFor(() =>
+      expect(toaster.toast).toHaveBeenCalledWith({
+        title: "Tender",
+        body: "Your RomM sign-in does not allow multiplayer",
+        subtext: "Sign in again with your username and password in Tender › Settings › Connections.",
+      }),
+    );
+    expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+    expect(within(container).getByText("Play")).toBeInTheDocument();
   });
 });

@@ -54,3 +54,6 @@ coverage.json
 # Frontend test coverage
 coverage/
 deno.lock
+
+# Decky zip built by scripts/package_decky_zip.sh
+/build/

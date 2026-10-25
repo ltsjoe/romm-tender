@@ -56,6 +56,7 @@ from services.firmware import FirmwareService
 from services.game_process import GameProcessService
 from services.library import LibraryService
 from services.metadata import MetadataService
+from services.netplay import NetplayService
 from services.playtime import PlaytimeService
 from services.prune import PruneService
 from services.saves import SaveService
@@ -527,6 +528,10 @@ class TestWireServices:
                 prune_artifacts=deps["prune_artifacts"],
                 steam_recovery=deps["steam_recovery"],
                 data_location_store=deps["data_location_store"],
+                retroarch_cores=MagicMock(),
+                netplay_config_store=MagicMock(),
+                local_network=MagicMock(),
+                lobby_rooms=MagicMock(),
             ),
             stores=StateBundle(
                 settings=deps["settings"],
@@ -615,7 +620,7 @@ class TestWireServices:
     def test_returns_expected_services(self, tmp_path):
         deps = self._make_deps(tmp_path)
         result = wire_services(self._make_config(deps))
-        assert len(result) == 28
+        assert len(result) == 29
         assert "migration_service" in result
         assert "game_detail_service" in result
         assert "rom_removal_service" in result
@@ -636,6 +641,7 @@ class TestWireServices:
         assert "game_process_service" in result
         assert isinstance(result["game_process_service"], GameProcessService)
         assert "relaunch_options_resolver" in result
+        assert isinstance(result["netplay_service"], NetplayService)
         deps["loop"].close()
 
     def test_pending_sync_binding_observes_library_rebinds(self, tmp_path):

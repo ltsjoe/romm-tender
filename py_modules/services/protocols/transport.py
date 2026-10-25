@@ -439,6 +439,72 @@ class RommTokenApi(Protocol):
         ...
 
 
+class RommActivityApi(Protocol):
+    """RomM's activity feed (5.0.0+): who is playing what right now.
+
+    An entry lives 90 seconds past its last heartbeat. Reading the feed needs
+    the ``roms.user.read`` scope; sending or clearing a heartbeat needs
+    ``roms.user.write``, which a token from a pairing code or a pasted token may
+    lack — that refusal arrives as ``RommForbiddenError``.
+    """
+
+    def send_activity_heartbeat(self, rom_id: int, device_id: str) -> dict[str, Any]:
+        """Mark this user as playing *rom_id* on the registered *device_id*.
+
+        ``POST /api/activity/heartbeat``. Returns the activity entry.
+        """
+        ...
+
+    def clear_activity_heartbeat(self, device_id: str) -> None:
+        """End this user's activity entry for *device_id* at once (``DELETE /api/activity/heartbeat``)."""
+        ...
+
+    def list_activity(self) -> list[dict[str, Any]]:
+        """Every live activity entry the caller may see (``GET /api/activity``)."""
+        ...
+
+
+class RommNoteApi(Protocol):
+    """A ROM's notes: the caller's own and every other user's public ones.
+
+    Reading needs ``roms.read``; creating, changing and deleting need
+    ``roms.user.write`` and touch only the caller's own notes. RomM keeps one
+    note per ROM, user and title, so a second note under a title the user
+    already holds on that ROM is refused.
+    """
+
+    def list_rom_notes(self, rom_id: int) -> list[dict[str, Any]]:
+        """The notes on *rom_id* the caller may read (``GET /api/roms/{id}/notes``)."""
+        ...
+
+    def create_rom_note(self, rom_id: int, *, title: str, content: str, is_public: bool) -> dict[str, Any]:
+        """Create a note on *rom_id*; returns it with its ``id``."""
+        ...
+
+    def update_rom_note(self, rom_id: int, note_id: int, *, content: str) -> dict[str, Any]:
+        """Replace the content of the caller's note *note_id* on *rom_id*."""
+        ...
+
+    def delete_rom_note(self, rom_id: int, note_id: int) -> None:
+        """Delete the caller's note *note_id*; RomM's entity 404 means it is already gone."""
+        ...
+
+
+class RommNetplayApi(RommActivityApi, RommNoteApi, RommVersion, Protocol):
+    """RomM surface for multiplayer sessions — activity, notes, and the server's identity."""
+
+
+class LobbyRoomsFn(Protocol):
+    """Read libretro's public netplay lobby: every announced RetroArch room.
+
+    Each entry is the lobby's own ``fields`` object (``username``, ``core_name``,
+    ``host_method``, ``mitm_ip``, ``mitm_port``, ``mitm_session``, ``created``,
+    …), unvalidated. Not a RomM request. Raises on a transport failure.
+    """
+
+    def __call__(self) -> list[dict[str, Any]]: ...
+
+
 class RommAchievementsApi(RommRomReader, RommVersion, Protocol):
     """RomM surface for AchievementsService — ROM detail + server identity."""
 
@@ -472,6 +538,7 @@ class RommApi(
     RommAchievementsApi,
     RommFirmwareApi,
     RommPlaytimeApi,
+    RommNetplayApi,
     Protocol,
 ):
     """Umbrella Protocol composing all per-domain RomM API Protocols."""

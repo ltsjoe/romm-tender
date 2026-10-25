@@ -396,6 +396,37 @@ class RommApiAdapter:
         payload = {k: v for k, v in fields.items() if v is not None}
         return self._client.put_json(f"/api/devices/{urllib.parse.quote(device_id, safe='')}", payload)
 
+    # ── Activity feed (RomM 5.0.0+) ───────────────────────────────────
+
+    def send_activity_heartbeat(self, rom_id: int, device_id: str) -> dict[str, Any]:
+        return self._client.post_json("/api/activity/heartbeat", {"rom_id": rom_id, "device_id": device_id})
+
+    def clear_activity_heartbeat(self, device_id: str) -> None:
+        # RomM takes the device id as a query parameter on this route, not a body.
+        self._client.delete(f"/api/activity/heartbeat?device_id={urllib.parse.quote(device_id, safe='')}")
+
+    def list_activity(self) -> list[dict[str, Any]]:
+        result = self._client.request("/api/activity")
+        return result if isinstance(result, list) else []
+
+    # ── ROM notes ─────────────────────────────────────────────────────
+
+    def list_rom_notes(self, rom_id: int) -> list[dict[str, Any]]:
+        result = self._client.request(f"/api/roms/{rom_id}/notes")
+        return result if isinstance(result, list) else []
+
+    def create_rom_note(self, rom_id: int, *, title: str, content: str, is_public: bool) -> dict[str, Any]:
+        return self._client.post_json(
+            f"/api/roms/{rom_id}/notes",
+            {"title": title, "content": content, "is_public": is_public, "tags": []},
+        )
+
+    def update_rom_note(self, rom_id: int, note_id: int, *, content: str) -> dict[str, Any]:
+        return self._client.put_json(f"/api/roms/{rom_id}/notes/{note_id}", {"content": content})
+
+    def delete_rom_note(self, rom_id: int, note_id: int) -> None:
+        self._client.delete(f"/api/roms/{rom_id}/notes/{note_id}")
+
     # ── Play sessions (native ingest, ADR-0018) ───────────────────────
 
     def ingest_play_sessions(self, device_id: str, sessions: list[PlaySessionIngestEntry]) -> PlaySessionIngestResponse:

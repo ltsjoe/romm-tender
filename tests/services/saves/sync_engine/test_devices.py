@@ -767,3 +767,75 @@ class TestForgetDevice:
         registry, _uow_factory, _fake = _make_registry()
         registry.forget_device()
         assert registry.get_device_id() is None
+
+
+class TestDeviceIdentityWithoutSaveSync:
+    """A multiplayer session needs a RomM device whether or not save sync is on (#1 D22).
+
+    The identity is the same device save sync would register, and registering
+    it never turns save sync on; save sync's own entry point still refuses
+    while it is off.
+    """
+
+    @pytest.mark.asyncio
+    async def test_registers_while_save_sync_is_off(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        assert svc._config.settings.get("save_sync_enabled") is not True
+
+        result = await svc.ensure_device_identity()
+
+        assert result["success"] is True
+        assert result["device_id"]
+        assert _get_device_id(svc) == result["device_id"]
+        assert _register_call(fake) is not None
+        assert svc._config.settings.get("save_sync_enabled") is not True
+
+    @pytest.mark.asyncio
+    async def test_save_syncs_own_entry_still_refuses_while_off(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+
+        result = await svc.ensure_device_registered()
+
+        assert result["success"] is False
+        assert result["reason"] == "sync_disabled"
+        assert _register_call(fake) is None
+
+    @pytest.mark.asyncio
+    async def test_an_existing_device_is_reused(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, "server-uuid")
+        svc._config.settings["save_sync_enabled"] = False
+
+        result = await svc.ensure_device_identity()
+
+        assert result["device_id"] == "server-uuid"
+        assert _register_call(fake) is None
+
+    @pytest.mark.asyncio
+    async def test_a_registration_failure_is_classified(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        fake.set_version("5.3.0")
+        fake.fail_on_next(RommForbiddenError("forbidden"))
+
+        result = await svc.ensure_device_identity()
+
+        assert result["success"] is False
+        assert result["reason"] == ErrorCode.AUTH_FAILED.value
+        assert _get_device_id(svc) is None
+
+
+class TestSaveDirForRom:
+    """The folder an installed ROM's saves sit in, as save sync reads it."""
+
+    def test_an_installed_rom_answers_its_save_folder(self, tmp_path):
+        svc, _fake = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
+
+        info = svc._rom_info.get_rom_save_info(42)
+        assert info is not None
+        assert svc.save_dir_for_rom(42) == info["saves_dir"]
+        assert svc.save_dir_for_rom(42)
+
+    def test_a_rom_that_is_not_installed_has_none(self, tmp_path):
+        svc, _fake = make_service(tmp_path)
+        assert svc.save_dir_for_rom(99) is None

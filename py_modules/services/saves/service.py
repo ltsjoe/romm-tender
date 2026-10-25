@@ -225,6 +225,31 @@ class SaveService:
         """List all devices registered with the RomM server for this user."""
         return await self._sync_engine.list_devices()
 
+    async def ensure_device_identity(self) -> dict[str, Any]:
+        """Register this device with RomM without regard to save sync's switch.
+
+        The device save sync would use, registered for a caller that needs a
+        RomM device while save sync is off; save sync is left switched as it
+        was. Same answer shape as :meth:`ensure_device_registered`. Satisfies
+        the ``DeviceRegistrationFn`` seam.
+        """
+        return await self._device_registry.ensure_registered(
+            loop=self._loop,
+            hostname_provider=self._config.hostname_provider,
+            machine_id_provider=self._config.machine_id_provider,
+        )
+
+    def save_dir_for_rom(self, rom_id: int) -> str | None:
+        """The folder an installed ROM's saves sit in, as save sync resolves it.
+
+        The ROM's own launch decides it — its active core's name where saves are
+        sorted by core — so a launch on another core can be pointed at the same
+        folder. ``None`` for a ROM that is not installed. Satisfies the
+        ``RomSaveDirFn`` seam.
+        """
+        info = self._rom_info.get_rom_save_info(int(rom_id))
+        return info["saves_dir"] if info else None
+
     # ------------------------------------------------------------------
     # Status (delegated to StatusService)
     # ------------------------------------------------------------------

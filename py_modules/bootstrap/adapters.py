@@ -35,8 +35,11 @@ from adapters.game_process import GameProcessAdapter
 from adapters.gavel_native import GavelNativeAdapter
 from adapters.hostname import HostnameAdapter
 from adapters.launcher_install import LauncherInstallAdapter
+from adapters.libretro_lobby import LibretroLobbyAdapter
+from adapters.local_network import LocalNetworkAdapter
 from adapters.machine_id import MachineIdAdapter
 from adapters.migration_file import MigrationFileAdapter
+from adapters.netplay_config import NetplayConfigAdapter
 from adapters.path_probe import PathProbeAdapter, ResolvedPathAdapter
 from adapters.persistence import (
     SETTINGS_FILENAME,
@@ -92,8 +95,11 @@ if TYPE_CHECKING:
         FirmwareResolver,
         GameProcessControl,
         HostnameReader,
+        LobbyRoomsFn,
+        LocalNetworkReader,
         MachineIdReader,
         MigrationFileStore,
+        NetplayConfigStore,
         PathExistsReader,
         PlatformCoreReader,
         PluginMetadataReader,
@@ -103,6 +109,7 @@ if TYPE_CHECKING:
         RendererRssFn,
         ResolvedPathFn,
         ResolveUploadConflictFn,
+        RetroArchCoreInfoReader,
         RetroArchSaveLayoutProvider,
         RetroArchSavestateLayoutProvider,
         RetroDeckPaths,
@@ -169,6 +176,10 @@ class AdapterBundle:
     prune_artifacts: PruneArtifactStore
     steam_recovery: SteamRecoveryStore
     data_location_store: DataLocationStore
+    retroarch_cores: RetroArchCoreInfoReader
+    netplay_config_store: NetplayConfigStore
+    local_network: LocalNetworkReader
+    lobby_rooms: LobbyRoomsFn
 
 
 @dataclass(frozen=True)
@@ -438,9 +449,10 @@ def bootstrap(
     platform_core_reader = PlatformCoreReaderAdapter(settings)
     plugin_metadata = PluginMetadataAdapter()
     # Single source of truth for outgoing User-Agent — read package.json once at
-    # boot and thread the string to the two adapters that talk to a server off
-    # this machine (RomM and SteamGridDB). ``RendererGcAdapter`` also speaks
-    # HTTP, to Steam's own debugger on localhost, and takes no UA. Bot Fight Mode
+    # boot and thread the string to the adapters that talk to a server off this
+    # machine (RomM, SteamGridDB and libretro's netplay lobby).
+    # ``RendererGcAdapter`` also speaks HTTP, to Steam's own debugger on
+    # localhost, and takes no UA. Bot Fight Mode
     # on Cloudflare blocks the default ``Python-urllib`` UA before requests reach
     # self-hosted RomM (#249). Both halves come from that one read: a literal
     # name here would be a second spelling of the package, free to drift away
@@ -475,6 +487,9 @@ def bootstrap(
     renderer_rss = RendererRssAdapter()
     renderer_gc = RendererGcAdapter(logger=logger)
     game_process = GameProcessAdapter()
+    netplay_config_store = NetplayConfigAdapter(user_home=user_home)
+    local_network = LocalNetworkAdapter()
+    lobby = LibretroLobbyAdapter(user_agent=user_agent)
     # The compiled gavel core owns both save-sync decisions — the per-file sync
     # action and the upload-409 resolution. Loaded eagerly so a missing /
     # wrong-architecture artifact is fatal here (like the SQLite migration gate
@@ -546,6 +561,10 @@ def bootstrap(
         prune_artifacts=prune_artifacts,
         steam_recovery=steam_recovery,
         data_location_store=data_location_store,
+        retroarch_cores=retroarch_core_info,
+        netplay_config_store=netplay_config_store,
+        local_network=local_network,
+        lobby_rooms=lobby.list_rooms,
     )
     stores = StateBundle(
         settings=settings,

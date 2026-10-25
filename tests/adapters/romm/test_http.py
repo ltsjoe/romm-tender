@@ -2593,3 +2593,69 @@ class TestDownloadConditional:
         )
         with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommNotFoundError):
             adapter.download_conditional("/c.png?ts=1", dest, etag='"v1"')
+
+
+class TestRommDelete:
+    """The authenticated DELETE: through ``_urlopen``, the strict 404 proof, a 403 kept apart."""
+
+    def _resp(self, status: int, payload: bytes = b""):
+        resp = MagicMock()
+        resp.status = status
+        resp.read.return_value = payload
+        resp.__enter__ = MagicMock(return_value=resp)
+        resp.__exit__ = MagicMock(return_value=False)
+        return resp
+
+    def test_sends_an_authenticated_delete(self, plugin):
+        _setup_plugin(plugin)
+        with patch("urllib.request.urlopen", return_value=self._resp(204)) as mock_open:
+            result = plugin._http_adapter.delete("/api/activity/heartbeat?device_id=d")
+        assert result == {}
+        req = mock_open.call_args[0][0]
+        assert req.get_method() == "DELETE"
+        assert req.full_url == "http://romm.local/api/activity/heartbeat?device_id=d"
+        assert req.get_header("Authorization") == "Bearer rmm_token"
+        assert req.get_header("User-agent") == _USER_AGENT
+
+    def test_returns_a_json_body(self, plugin):
+        _setup_plugin(plugin)
+        with patch("urllib.request.urlopen", return_value=self._resp(200, b'{"message": "Note deleted"}')):
+            assert plugin._http_adapter.delete("/api/roms/1/notes/2") == {"message": "Note deleted"}
+
+    def test_goes_through_the_choke_point(self, plugin):
+        _setup_plugin(plugin)
+        with (
+            patch.object(plugin._http_adapter, "_urlopen", return_value=self._resp(204)) as choke,
+            patch("urllib.request.urlopen") as raw,
+        ):
+            plugin._http_adapter.delete("/api/roms/1/notes/2")
+        choke.assert_called_once()
+        raw.assert_not_called()
+
+    def test_a_403_is_forbidden(self, plugin):
+        _setup_plugin(plugin)
+        exc = _http_error(403, "Forbidden", content_type="application/json", body=b'{"detail":"Forbidden"}')
+        with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommForbiddenError):
+            plugin._http_adapter.delete("/api/roms/1/notes/2")
+
+    def test_an_entity_404_is_not_found(self, plugin):
+        _setup_plugin(plugin)
+        exc = _entity_404("Note not found or not owned by user")
+        with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommNotFoundError):
+            plugin._http_adapter.delete("/api/roms/1/notes/2")
+
+    def test_a_generic_404_is_no_entity_verdict(self, plugin):
+        _setup_plugin(plugin)
+        exc = _http_error(404, "Not Found", content_type="text/html", body=b"<html>404</html>")
+        with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommApiError) as exc_info:
+            plugin._http_adapter.delete("/api/roms/1/notes/2")
+        assert not isinstance(exc_info.value, RommNotFoundError)
+
+    def test_an_unreachable_server_is_a_connection_error(self, plugin):
+        _setup_plugin(plugin)
+        plugin._http_adapter.with_retry = lambda fn, *a, **kw: fn(*a, **kw)
+        with (
+            patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")),
+            pytest.raises(RommConnectionError),
+        ):
+            plugin._http_adapter.delete("/api/roms/1/notes/2")

@@ -58,6 +58,7 @@ def plugin():
     p._game_process_service = MagicMock()
     p._prune_service = MagicMock()
     p._prune_service.is_active.return_value = False
+    p._netplay_service = MagicMock()
     return p
 
 
@@ -885,9 +886,61 @@ class TestUnloadHook:
         plugin._migration_service.shutdown = AsyncMock()
         plugin._session_lifecycle_service.shutdown = AsyncMock()
         plugin._prune_service.shutdown = AsyncMock()
+        plugin._netplay_service.shutdown = AsyncMock()
         await plugin._unload()
         plugin._sync_service.shutdown.assert_called_once_with()
         plugin._download_service.shutdown.assert_awaited_once_with()
         plugin._migration_service.shutdown.assert_awaited_once_with()
         plugin._session_lifecycle_service.shutdown.assert_awaited_once_with()
         plugin._prune_service.shutdown.assert_awaited_once_with()
+        plugin._netplay_service.shutdown.assert_awaited_once_with()
+
+
+# ── Multiplayer (netplay) ──────────────────────────────────────────────
+
+
+class TestNetplayCallableDelegation:
+    @pytest.mark.asyncio
+    async def test_capability_delegates(self, plugin):
+        plugin._netplay_service.get_capability = AsyncMock(return_value={"success": True, "available": True})
+        assert await plugin.get_netplay_capability(7) == {"success": True, "available": True}
+        plugin._netplay_service.get_capability.assert_awaited_once_with(7)
+
+    @pytest.mark.asyncio
+    async def test_a_started_session_carries_a_lease_for_the_steam_write(self, plugin):
+        plugin._netplay_service.start_host_session = AsyncMock(
+            return_value={"success": True, "app_id": 1, "launch_options": "x"}
+        )
+        result = await plugin.start_host_session(7)
+        plugin._netplay_service.start_host_session.assert_awaited_once_with(7)
+        assert result["prune_lease_token"].startswith("netplay_launch:")
+
+    @pytest.mark.asyncio
+    async def test_a_refused_start_carries_no_lease(self, plugin):
+        refusal = {"success": False, "reason": "session_active", "message": "m"}
+        plugin._netplay_service.start_host_session = AsyncMock(return_value=dict(refusal))
+        assert await plugin.start_host_session(7) == refusal
+
+    @pytest.mark.asyncio
+    async def test_end_host_delegates(self, plugin):
+        plugin._netplay_service.end_host_session = AsyncMock(return_value={"success": True, "note_removed": True})
+        assert await plugin.end_host_session() == {"success": True, "note_removed": True}
+
+    @pytest.mark.asyncio
+    async def test_list_delegates(self, plugin):
+        plugin._netplay_service.list_hosted_sessions = AsyncMock(return_value={"success": True, "sessions": []})
+        assert await plugin.list_hosted_sessions() == {"success": True, "sessions": []}
+
+    @pytest.mark.asyncio
+    async def test_a_prepared_join_carries_a_lease_for_the_steam_write(self, plugin):
+        plugin._netplay_service.prepare_join_session = AsyncMock(
+            return_value={"success": True, "app_id": 1, "launch_options": "x"}
+        )
+        result = await plugin.prepare_join_session(7, 2, "2026-01-01T00:00:00+00:00")
+        plugin._netplay_service.prepare_join_session.assert_awaited_once_with(7, 2, "2026-01-01T00:00:00+00:00")
+        assert result["prune_lease_token"].startswith("netplay_launch:")
+
+    @pytest.mark.asyncio
+    async def test_end_join_delegates(self, plugin):
+        plugin._netplay_service.end_join_session = AsyncMock(return_value={"success": True})
+        assert await plugin.end_join_session() == {"success": True}

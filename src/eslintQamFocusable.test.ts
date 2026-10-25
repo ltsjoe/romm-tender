@@ -141,6 +141,7 @@ describe("QAM Focusable row rule", () => {
       "PlaytimeScopeBanner.tsx",
       "DownloadProgressRow.tsx",
       "LoadingRow.tsx",
+      "HostedSessionCard.tsx",
     ];
     await Promise.all(
       qamFiles.map(async (file) => {

@@ -131,6 +131,7 @@ modules =
     services.library
     services.metadata
     services.migration
+    services.netplay
     services.playtime
     services.prune
     services.relaunch_options_resolver

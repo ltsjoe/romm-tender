@@ -29,6 +29,7 @@ the ``Config Source Parsers`` wiki page for the rationale.
 from __future__ import annotations
 
 import os
+import re
 from typing import TYPE_CHECKING
 
 from adapters.flatpak_install import flatpak_app_files_dirs
@@ -39,6 +40,11 @@ if TYPE_CHECKING:
 
 # RetroArch's cores tree sits under the RetroDECK flatpak's files dir.
 _CORES_SUFFIX = os.path.join("retrodeck", "components", "retroarch", "rd_extras", "cores")
+
+# Where a baked launch loads a core from: the sandbox ``/var/config/retroarch/cores``
+# (``domain/shortcut_data.py``), which is this per-user tree on the host.
+_INSTALLED_CORES_DIR = os.path.join(".var", "app", "net.retrodeck.retrodeck", "config", "retroarch", "cores")
+_CORE_SO_RE = re.compile(r"^[A-Za-z0-9_]+_libretro$")
 
 
 class RetroArchCoreInfoAdapter:
@@ -93,3 +99,26 @@ class RetroArchCoreInfoAdapter:
         if info is None:
             return None
         return info.get("corename") or None
+
+    def savestate_features(self, core_so: str) -> str | None:
+        """Return the core's ``savestate_features`` field, or ``None``.
+
+        ``"deterministic"`` is the value RetroArch requires before it lets the
+        core run a netplay session. ``None`` when the ``.info`` file is missing
+        or carries no such field.
+        """
+        info = self.get_core_info(core_so)
+        if info is None:
+            return None
+        return info.get("savestate_features") or None
+
+    def core_installed(self, core_so: str) -> bool:
+        """Whether *core_so*'s ``.so`` is where a baked launch loads it from.
+
+        Not cached: a core RetroDECK installs mid-session is seen on the next
+        question. A name that is not a bare libretro core name is never
+        installed.
+        """
+        if not _CORE_SO_RE.match(core_so):
+            return False
+        return os.path.isfile(os.path.join(self._user_home, _INSTALLED_CORES_DIR, f"{core_so}.so"))

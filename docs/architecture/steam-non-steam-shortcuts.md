@@ -507,6 +507,17 @@ the unresolved callable stays observed so a lease token returned later is releas
 captures its plugin/component generation before gate and modal waits; teardown makes that admission stale, and even an
 immediate remount cannot let the old chain write launch options or invoke `RunGame` under the new generation.
 
+The game-detail Play button, its menu's **Host multiplayer**, and the **Join** on a hosted session's card on Main all
+launch through one funnel, `src/utils/launchFunnel.ts`. A **netplay launch** is the one launch that does not re-confirm:
+once the gate allows it, the funnel asks the backend for the session (`start_host_session` or `prepare_join_session`),
+writes the session's one-off command onto the shortcut under the `netplay_launch` lease the answer carries, hands the
+lease back, and runs the game. A re-confirm at that point would write the normal command back over the session's. The
+launch is recorded (`src/utils/netplayLaunch.ts`, mirrored into localStorage), and when the game exits the session
+manager ends the session and puts the normal command back through the same re-confirm. The one-off command is never
+recorded as the ROM's `applied_launch_options`. A frontend that starts again with a recorded launch whose game is gone
+ends it the same way; after a crash that left no record, the startup reconcile above puts the normal command back, and
+every later launch re-confirms it anyway.
+
 ## Key Files
 
 | File                                      | Purpose                                                                                                                                                                                                                                                                                                                                        |

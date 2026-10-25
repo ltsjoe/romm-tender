@@ -87,7 +87,7 @@ export default tseslint.config(
     files: [
       "src/index.tsx",
       "src/components/{MainPage,SyncPage,LibraryPage,SettingsPage,DangerZone,RemovedGamesCleanup,DownloadQueue}.tsx",
-      "src/components/{SessionBudgetBanner,MigrationBlockedPage,SettingsResetBanner,PlaytimeScopeBanner,DownloadProgressRow,LoadingRow}.tsx",
+      "src/components/{SessionBudgetBanner,MigrationBlockedPage,SettingsResetBanner,PlaytimeScopeBanner,DownloadProgressRow,LoadingRow,HostedSessionCard}.tsx",
       "src/components/{qam,sync,library,settings}/**/*.tsx",
     ],
     // A test renders no row a reader walks, and a modal is not a panel row at all —

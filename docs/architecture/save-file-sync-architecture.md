@@ -1105,10 +1105,11 @@ On a successful resolution the modal closes and surfaces a branch-specific confi
 the local save was uploaded to the server, **Use Server** confirms the server save is now in use and the prior local
 save was backed up to `.romm-backup`. Failure and stale branches stay inline in the modal instead (no toast).
 
-The modal is shown by `CustomPlayButton` during pre-launch sync, and by `VersionHistoryPanel.handleRestore` (in
-`SavesTab`) when a version-restore pre-flight returns `conflict_blocked`. Both call `showSyncConflictModal(conflict)`
-which returns a Promise resolving to `"keep_local" | "use_server" | "cancel"`. After post-exit sync, `sessionManager`
-only fires a toast — the conflict re-surfaces in the modal at the next pre-launch.
+The modal is shown by the launch funnel (`src/utils/launchFunnel.ts`) during pre-launch sync, and by
+`VersionHistoryPanel.handleRestore` (in `SavesTab`) when a version-restore pre-flight returns `conflict_blocked`. Both
+call `showSyncConflictModal(conflict)` which returns a Promise resolving to `"keep_local" | "use_server" | "cancel"`.
+After post-exit sync, `sessionManager` only fires a toast — the conflict re-surfaces in the modal at the next
+pre-launch.
 
 ### resolve_sync_conflict callable
 
@@ -1442,22 +1443,23 @@ that transferred nothing shows no toast. **Exception (#1486):** the manual per-g
 user action, so when it moves nothing and hits no conflicts it acknowledges with a "Saves already up to date" toast
 rather than staying silent; the automatic surfaces (pre-launch, post-exit) keep the silent zero-case. The wording lives
 in exactly one place: the frontend helper `saveSyncToastBody` (`src/utils/saveSyncToast.ts`), which every surface
-renders through — pre-launch (`CustomPlayButton`), post-exit (`sessionManager`, from the counts on the
-`finalize_game_session` payload), and the manual per-game sync (`RomMPlaySection`). The backend delivers the counts as
-data, never the directional copy (#1481); the offline/failure body it still owns rides a separate `failure_toast` field
-on `SessionFinalizeSyncResult`.
+renders through — pre-launch (the launch funnel, `src/utils/launchFunnel.ts`), post-exit (`sessionManager`, from the
+counts on the `finalize_game_session` payload), and the manual per-game sync (`RomMPlaySection`). The backend delivers
+the counts as data, never the directional copy (#1481); the offline/failure body it still owns rides a separate
+`failure_toast` field on `SessionFinalizeSyncResult`.
 
 ### Pre-launch sync
 
 Triggered from the game detail page when the user clicks the Play button (if `sync_before_launch` is enabled). This is
-**not** triggered automatically via `RegisterForAppLifetimeNotifications` — pre-launch sync runs explicitly from
-`CustomPlayButton.handlePlay()`.
+**not** triggered automatically via `RegisterForAppLifetimeNotifications` — pre-launch sync runs explicitly from the
+launch funnel (`launchThroughFunnel` in `src/utils/launchFunnel.ts`), which Play, Host multiplayer and a hosted
+session's Join all go through.
 
 1. User clicks Play on the game detail page.
-2. `CustomPlayButton` calls `preLaunchSync(romId)` on the backend (15s timeout).
+2. The launch funnel calls `preLaunchSync(romId)` on the backend (15s timeout).
 3. Backend fetches server saves, runs `do_sync_rom_saves` which iterates files and dispatches every
    `compute_sync_action` outcome.
-4. If a `Conflict` was returned for any file, the result includes a `conflicts` list. `CustomPlayButton` shows
+4. If a `Conflict` was returned for any file, the result includes a `conflicts` list. The launch funnel shows
    `SyncConflictModal` for the first conflict, awaits the user's choice, then either re-runs sync (Keep Local / Use
    Server) or falls through (Cancel).
 5. Game launches — but a sync failure or timeout no longer launches unconditionally. `runPreLaunchSync` surfaces a "Save
@@ -1900,8 +1902,8 @@ Detection is **reactive, not polled**: the overlay is seeded synchronously at mo
 `isAppRunning(appId)` (so a page opened mid-session — or after a reload-adoption — shows Resume immediately) and flipped
 live by the `romm_session_changed` DOM event, which `sessionManager` dispatches on game start (`running: true`), game
 stop (`running: false`), and both reload-adoption branches (`running: true`). The already-running guards from #1148 /
-\#1308 (the interceptor and the `handlePlay` guard) stay in place as **backstops** for the render→click race, where the
-session begins between the button rendering Play and the user pressing it.
+\#1308 (the interceptor and the launch funnel's guard) stay in place as **backstops** for the render→click race, where
+the session begins between the button rendering Play and the user pressing it.
 
 #### Stop Game
 

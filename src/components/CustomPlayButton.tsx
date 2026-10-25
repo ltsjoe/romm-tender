@@ -6,7 +6,8 @@
  * - Syncing: Save sync in progress before launch
  *
  * Includes a dropdown menu button (arrow) to the right of the Play button
- * with action: Uninstall.
+ * with actions: Host multiplayer (for a game that can be hosted) and Uninstall.
+ * Play and Host multiplayer both launch through `utils/launchFunnel.ts`.
  */
 
 import { useState, useEffect, useRef, FC, ReactElement } from "react";
@@ -31,38 +32,27 @@ import {
   getDownloadQueue,
   removeRom,
   debugLog,
-  preLaunchSync,
   getSaveStatus,
   isCallableFailure,
   logError,
-  isSaveTrackingConfigured,
-  getSaveSetupInfo,
-  confirmSlotChoice,
-  checkCoreChange,
-  probeReachability,
-  checkLocalDrift,
   stopRunningGame,
+  getNetplayCapability,
+  startHostSession,
 } from "../api/backend";
 import { getRommConnectionState, onRommConnectionChange, reportServerReachable } from "../utils/connectionState";
 import { isBoundVanished, onBoundVanishedChange } from "../utils/vanishedBinding";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { getEventTarget } from "../utils/events";
-import { applyLaunchGateSetupOutcome, resolveSaveSetupOutcome } from "../utils/saveSetup";
 import { handleButtonDownloadFailure } from "../utils/downloadFailure";
 import { comparisonForCandidate, showAdoptExistingModal } from "./AdoptExistingModal";
 import { showAdoptCandidateModal } from "./AdoptCandidateModal";
 import { showAdoptCollisionModal } from "./AdoptCollisionModal";
 import { showAdoptUnusableModal } from "./AdoptUnusableModal";
 import { showAdoptVanishedModal } from "./AdoptVanishedModal";
-import { showCoreChangeModal } from "./CoreChangeModal";
 import { handleConflicts } from "./SyncConflictModal";
-import { showOfflineDriftModal } from "./OfflineDriftModal";
-import { showFallbackLaunchModal } from "./FallbackLaunchModal";
+import { MODAL_LAUNCH_PROMPTS } from "./launchPrompts";
+import { launchThroughFunnel, type LaunchRequest } from "../utils/launchFunnel";
 import { showStopGameModal } from "./StopGameModal";
-import { getMigrationState } from "../utils/migrationStore";
-import { runLaunchGate, markLaunchSkipped } from "../utils/launchGate";
-import { NO_LAUNCH_TARGET_TOAST_BODY, romHasLaunchTarget } from "../utils/launchTarget";
-import type { GateVerdict, LaunchGateOps, PreLaunchSyncOutcome } from "../utils/launchGate";
 import { isSessionActive } from "../utils/sessionManager";
 import { isAppRunning } from "../utils/runningApps";
 import type {
@@ -76,19 +66,14 @@ import type {
   CollisionChoice,
   UninstallProgressEvent,
 } from "../types";
-import { BENIGN_SYNC_SKIP_REASONS } from "../types";
 import { detach } from "../utils/detach";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import {
   capturePruneLeaseAdmission,
-  isPruneLeaseAdmissionCurrent,
   mountPruneLeaseOwner,
   releasePruneLeasesByOwner,
   withPruneLease,
-  type PruneLeaseAdmission,
 } from "../utils/pruneLease";
-import { reconfirmLaunchOptions } from "../utils/launchOptionsReconcile";
-import { saveSyncToastBody } from "../utils/saveSyncToast";
 
 type PlayButtonState =
   | "loading"
@@ -148,7 +133,7 @@ interface CustomPlayButtonProps {
 // S3776 is raised on the declaration line, so its NOSONAR must stay there. prettier-ignore stops
 // Prettier from relocating the trailing comment into the body (which would break the suppression).
 // prettier-ignore
-export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // NOSONAR(typescript:S3776) — remaining cc is the per-state render branching (download/dl_complete/uninstalling/launching/syncing/conflict/play each return a distinct button shape); the gate chain now lives in runLaunchGate, not here.
+export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // NOSONAR(typescript:S3776) — remaining cc is the per-state render branching (download/dl_complete/uninstalling/launching/syncing/conflict/play each return a distinct button shape); the gate chain lives in utils/launchFunnel.ts, not here.
   const leaseOwner = `custom-play-button:${appId}`;
   const [state, setState] = useState<PlayButtonState>("loading");
   const [romId, setRomId] = useState<number | null>(null);
@@ -175,6 +160,10 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   // an undifferentiated Download; the comparison itself arrives at click time.
   const [targetOccupied, setTargetOccupied] = useState(false);
   const [candidatePresent, setCandidatePresent] = useState(false);
+  // Whether Host multiplayer belongs in the play row's menu (#1 D6). Held with
+  // the rom it was read for, so a version switch never shows the answer for the
+  // version it replaced.
+  const [netplayCapability, setNetplayCapability] = useState<{ romId: number; available: boolean } | null>(null);
   // Per-file progress of an in-flight uninstall (multi-file ROMs only).
   const [uninstallProgress, setUninstallProgress] = useState<{ removed: number; total: number } | null>(null);
   // Set synchronously before the uninstall's first await, so a second press
@@ -324,6 +313,27 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       cancelled = true;
     };
   }, [appId]);
+
+  // Asked each time the button settles on Play, which is when the play row's
+  // menu can be opened. A failed read leaves Host multiplayer out.
+  const playable = state === "play";
+  useEffect(() => {
+    if (romId === null || !playable) return;
+    let cancelled = false;
+    const readCapability = async (): Promise<void> => {
+      try {
+        const capability = await getNetplayCapability(romId);
+        if (!cancelled) setNetplayCapability({ romId, available: capability.available });
+      } catch (e) {
+        detach(debugLog(`CustomPlayButton: multiplayer capability read failed: ${e}`));
+      }
+    };
+    detach(readCapability());
+    return () => {
+      cancelled = true;
+    };
+  }, [romId, playable]);
+  const hostable = netplayCapability !== null && netplayCapability.romId === romId && netplayCapability.available;
 
   // Listen for download events
   useEffect(() => {
@@ -542,291 +552,33 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     return () => clearTimeout(timer);
   }, [state]);
 
-  // Save-slot tracking gate. Delegates branch handling to applyLaunchGateSetupOutcome
-  // so the per-outcome side effects (toast + saves-tab switch vs auto-confirm) stay
-  // testable without rendering this component.
-  //
-  // The try only guards the network call (getSaveSetupInfo). Post-result branching
-  // (resolveSaveSetupOutcome + applyLaunchGateSetupOutcome) sits OUTSIDE the try so
-  // that an exception in a side-effect callback (toast / dispatchEvent / confirm)
-  // cannot silently flip "abort" → "proceed" — the abort-propagation bug pattern
-  // #619 was opened to prevent.
-  const ensureTrackingConfigured = async (rid: number): Promise<"proceed" | "abort"> => {
-    const trackingResult = await isSaveTrackingConfigured(rid).catch(() => ({ configured: true }));
-    if (trackingResult.configured) return "proceed";
-
-    let setupInfo;
-    /* istanbul ignore next -- network-IO + defer-to-launch fallback; behavior tested at service layer */
-    try {
-      setupInfo = await getSaveSetupInfo(rid);
-    } catch {
-      // Network/backend failure — defer to launch rather than blocking the user.
-      return "proceed";
-    }
-
-    /* istanbul ignore next -- delegates to applyLaunchGateSetupOutcome; logic covered in src/utils/saveSetup.test.ts */
-    return applyLaunchGateSetupOutcome(resolveSaveSetupOutcome(setupInfo), {
-      rid,
-      confirmSlotChoice,
-      toast: (body) => showToast(body),
-      dispatchSavesTab: () =>
-        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } })),
-    });
-  };
-
-  // Detects emulator core change since last launch; if changed, surfaces the
-  // core-change confirm modal. Returns true to proceed, false to bail.
-  const confirmCoreChangeIfNeeded = async (rid: number): Promise<boolean> => {
-    const coreCheck = await checkCoreChange(rid).catch(
-      (): { changed: boolean; old_core?: string; new_core?: string; old_label?: string; new_label?: string } => ({
-        changed: false,
-      }),
-    );
-    if (!coreCheck.changed) return true;
-    return showCoreChangeModal(
-      coreCheck.old_label ?? coreCheck.old_core ?? "Unknown",
-      coreCheck.new_label ?? coreCheck.new_core ?? "Unknown",
-    );
-  };
-
-  // Online pre-launch sync, mapped onto the gate's PreLaunchSyncOutcome (the
-  // gate routes it to conflict / sync_failed / allow). Keeps the Play button's
-  // existing 15s timeout, the `setState("syncing")` transition, the benign
-  // `savefiles_in_content_dir` skip, and the success toast — all the
-  // side-effects the verdict mapping can't carry stay here; conflict resolution
-  // and the fallback confirm move to the verdict switch in `handlePlay`.
-  //
-  // Like the watcher, this MUST NOT fail open: a throw or timeout returns
-  // `{ success: false }` (→ sync_failed → fallback confirm) rather than
-  // propagating to the gate's blanket catch and silently launching on stale
-  // saves (#1050).
-  const runPreLaunchSync = async (rid: number): Promise<PreLaunchSyncOutcome> => {
-    setState("syncing");
-    let result: Awaited<ReturnType<typeof preLaunchSync>>;
-    try {
-      result = await Promise.race([
-        preLaunchSync(rid),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 15000)),
-      ]);
-    } catch (e) {
-      detach(debugLog(`CustomPlayButton: pre-launch sync failed: ${e}`));
-      return { success: false, message: "" };
-    }
-
-    detach(
-      debugLog(
-        `CustomPlayButton: preLaunchSync result: synced=${result.synced} conflicts=${result.conflicts?.length ?? 0} success=${result.success}`,
-      ),
-    );
-
-    // Benign skip: either RetroArch writes saves to the content dir (#239), or
-    // this game's emulator keeps no per-game save file set the plugin can carry
-    // (#1858). NOT a failure — proceed to launch silently (no toast, no
-    // fallback-launch confirm). Both are standing facts about the machine, so a
-    // confirm on every single launch would be pure noise. The content-dir case
-    // already has its banner in RomMPlaySection; rendering the save-state cases
-    // is #1858's follow-up, so until then this path is silent.
-    if (result.reason !== undefined && BENIGN_SYNC_SKIP_REASONS.includes(result.reason)) {
-      detach(debugLog(`CustomPlayButton: pre-launch sync skipped (${result.reason}) — launching`));
-      return { success: true, message: result.message };
-    }
-
-    if (result.conflicts && result.conflicts.length > 0) {
-      return { success: result.success, message: result.message, conflicts: result.conflicts };
-    }
-
-    if (!result.success) {
-      detach(
-        debugLog(
-          `CustomPlayButton: pre-launch sync failed: reason=${result.reason ?? ""} errors=[${result.errors?.join(", ") ?? ""}] message=${result.message}`,
-        ),
-      );
-      // Any resolved failure must surface as sync_failed, not silently proceed.
-      // Failures with no errors array — DEVICE_NOT_REGISTERED,
-      // blocked_by_migration, save_sort_changed — still mean sync didn't run;
-      // without this the user plays on stale local saves believing pre-launch
-      // sync happened (#1050).
-      return { success: false, message: result.message };
-    }
-
-    const toastBody = saveSyncToastBody(result.uploaded, result.downloaded);
-    if (toastBody) {
-      showToast(toastBody);
-    }
-    return { success: true, message: result.message };
-  };
-
-  // Final launch step — set state and hand off to Steam. Marks the appId in the
-  // shared skip-set immediately before RunGame so this RunGame does NOT re-enter
-  // the global watcher and re-gate a launch that already ran the funnel (the
-  // double-gate fix C1).
-  const dispatchLaunch = async (gameId: string, admission: PruneLeaseAdmission) => {
-    if (!isPruneLeaseAdmissionCurrent(admission)) return;
-    setState("launching");
-    // Heal any mid-session launch_options drift on this shortcut before launch
-    // (#1150) via the shared bounded-race re-confirm. Ordinary I/O failures stay
-    // best-effort; timeout or plugin teardown cancels this launch.
-    if (romId) {
-      const reconfirm = await reconfirmLaunchOptions(romId, appId, "CustomPlayButton", admission);
-      if (reconfirm.status === "cancelled") return;
-      if (reconfirm.status === "timeout") {
-        setState("play");
-        return;
-      }
-    }
-    markLaunchSkipped(appId);
-    SteamClient.Apps.RunGame(gameId, "", -1, 100);
-  };
-
-  // Build the shared-funnel callbacks for this ROM. The Play button runs on the
-  // open game-detail page, so it uses the PAGE-AWARE tracking/core helpers (the
-  // saves-tab switch + the imperative core modal) — NOT the watcher's silent
-  // auto-adopt. Reachability is a FRESH probe at Play time (decision B), so the
-  // page-open-stale `getRommConnectionState()` flag no longer gates the launch.
-  const makePlayButtonOps = (rid: number): LaunchGateOps => ({
-    migrationPending: () => getMigrationState().pending,
-    hasLaunchTarget: () => romHasLaunchTarget(rid, "CustomPlayButton"),
-    ensureTrackingConfigured: () => ensureTrackingConfigured(rid),
-    checkCoreChange: () => confirmCoreChangeIfNeeded(rid),
-    checkReachability: async () => {
-      // A resolved probe is a definitive reachability signal → feed the shared
-      // store so the badge/Download re-derive (#1345). A throw is a bridge error,
-      // not a server verdict, so it does NOT flip the store — but the launch still
-      // treats it as offline (fail-safe).
-      try {
-        const { online } = await probeReachability();
-        reportServerReachable(online);
-        return online;
-      } catch (e) {
-        logError(`CustomPlayButton: reachability probe failed (treating as offline): ${e}`);
-        return false;
-      }
-    },
-    preLaunchSync: () => runPreLaunchSync(rid),
-    checkLocalDrift: async () =>
-      (
-        await checkLocalDrift(rid).catch((e) => {
-          logError(`CustomPlayButton: local-drift check failed (treating as not-drifted): ${e}`);
-          return { drifted: false, rom_id: rid };
-        })
-      ).drifted,
+  // The launch funnel's request for this ROM. The play button is the funnel's
+  // page-aware caller: its prompts are the imperative modals, its progress the
+  // button's own states, and its admission is scoped to this mounted button.
+  const launchRequest = (): LaunchRequest => ({
+    appId,
+    romId,
+    context: "CustomPlayButton",
+    prompts: MODAL_LAUNCH_PROMPTS,
+    setState,
+    leaseOwner,
   });
 
-  // Coordinator: runs the shared launch gate (ADR-0015) and acts on its verdict.
-  // The Play button and the global watcher share this one decision path; the
-  // verdict switch is the Play button's page-aware reaction (in-place button
-  // states), mirroring the watcher's imperative-modal reaction.
   const handlePlay = async () => {
     if (state === "syncing" || state === "launching") return; // debounce
-    const overview = appStore.GetAppOverviewByAppID(appId);
-    const gameId = overview?.GetGameID?.() ?? String(appId);
-    const admission = capturePruneLeaseAdmission(leaseOwner);
-    detach(debugLog(`CustomPlayButton: handlePlay appId=${appId} gameId=${gameId}`));
-
-    // Non-RomM / unresolved ROM — nothing to gate, launch straight through.
-    if (!romId) {
-      await dispatchLaunch(gameId, admission);
-      return;
-    }
-
-    // Already-running guard (#1148 round 2) — the sibling of the launch
-    // interceptor's guard, since this button is the other launch path and its
-    // enabled state derives from cached install/conflict status, not running
-    // state. A Play press on an already-running game must NOT run the pre-launch
-    // sync: it would upload the save mid-session while the emulator holds the file
-    // open and manufacture a conflict at exit. Skip the whole gate/sync funnel and
-    // just bring the game to front — `dispatchLaunch` skip-marks the appId so the
-    // resulting RunGame doesn't re-enter the interceptor and re-gate either.
-    if (isSessionActive(romId) || isAppRunning(appId)) {
-      detach(debugLog(`CustomPlayButton: appId=${appId} already running — skipping pre-launch sync`));
-      await dispatchLaunch(gameId, admission);
-      return;
-    }
-
-    // `runPreLaunchSync` flips the button to "syncing"; an unexpected throw from
-    // the gate or a verdict's modal helper (framework-level) would otherwise
-    // leave the button frozen there. The watcher never traps the user's game;
-    // the Play-button equivalent is to reset the button to "play".
-    //
-    // Retry loop: the offline-drift modal can ask to re-probe. Each retry is a
-    // fresh user action, so the loop is bounded by the user choosing "Retry"
-    // again; the only thing that re-runs is the gate (which re-probes via the
-    // fast reachability check), and `actOnVerdict` signals back "retry".
-    try {
-      let verdict = await runLaunchGate(appId, romId, makePlayButtonOps(romId));
-      while ((await actOnVerdict(verdict, gameId, romId, admission)) === "retry") {
-        verdict = await runLaunchGate(appId, romId, makePlayButtonOps(romId));
-      }
-    } catch (e) {
-      detach(debugLog(`CustomPlayButton: handlePlay unexpected error — resetting to play: ${e}`));
-      setState("play");
-    }
+    await launchThroughFunnel(launchRequest());
   };
 
-  // Map a gate verdict onto the Play button's UI. `dispatchLaunch` marks the
-  // skip-set, so every relaunch from here is exempt from the watcher (no
-  // double-gate). Each non-launch branch returns the button to a settled state.
-  // Returns "retry" only from the offline-drift branch when the user asks to
-  // re-probe — `handlePlay` loops on that and re-runs the gate; every other
-  // outcome returns "done".
-  const actOnVerdict = async (
-    verdict: GateVerdict,
-    gameId: string,
-    rid: number,
-    admission: PruneLeaseAdmission,
-  ): Promise<"done" | "retry"> => {
-    switch (verdict.decision) {
-      case "allow":
-        await dispatchLaunch(gameId, admission);
-        return "done";
-      case "abort":
-      case "block":
-        // abort: the user saw setup/core UI and declined. block/migration_pending:
-        // the QAM/page already surfaces it. Both bail silently to "play".
-        // block/no_launch_target has no such standing surface at the moment of the
-        // press — the page states it, but the press must not read as a dead button.
-        if (verdict.decision === "block" && verdict.reason === "no_launch_target") {
-          showToast(NO_LAUNCH_TARGET_TOAST_BODY);
-        }
-        setState("play");
-        return "done";
-      case "conflict": {
-        const resolution = await handleConflicts(verdict.conflicts);
-        if (resolution === "cancel") {
-          setState("conflict");
-          return "done";
-        }
-        // Conflicts resolved — notify sibling components to refresh, then launch.
-        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: rid } }));
-        await dispatchLaunch(gameId, admission);
-        return "done";
-      }
-      case "offline_drift": {
-        const choice = await showOfflineDriftModal();
-        if (choice === "start_anyway") {
-          await dispatchLaunch(gameId, admission);
-          return "done";
-        }
-        if (choice === "retry") {
-          // Re-run the gate (re-probes via the fast reachability check). The
-          // button stays interactive while the modal is open; flip to "syncing"
-          // so the user sees the gate working again instead of a dead "play".
-          setState("syncing");
-          return "retry";
-        }
-        setState("play");
-        return "done";
-      }
-      case "sync_failed": {
-        const proceed = await showFallbackLaunchModal(verdict.message);
-        if (proceed) {
-          await dispatchLaunch(gameId, admission);
-          return "done";
-        }
-        setState("play");
-        return "done";
-      }
-    }
+  // Host multiplayer (#1 D6): the same funnel, with the session started once the
+  // gate allows the launch and its one-off command written in place of the
+  // normal one.
+  const handleHost = async () => {
+    if (romId === null || state === "syncing" || state === "launching") return;
+    const rid = romId;
+    await launchThroughFunnel({
+      ...launchRequest(),
+      netplay: { role: "host", prepare: () => startHostSession(rid) },
+    });
   };
 
   // Resume an already-running game: bring it to the foreground instead of
@@ -1336,6 +1088,16 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   const showDropdownMenu = (e: MouseEvent) => {
     showContextMenu(
       <Menu label="RomM Actions">
+        {hostable && (
+          <MenuItem
+            key="host"
+            onClick={() => {
+              detach(handleHost());
+            }}
+          >
+            Host multiplayer
+          </MenuItem>
+        )}
         <MenuItem
           key="uninstall"
           tone="destructive"

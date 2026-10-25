@@ -754,9 +754,25 @@ driver is wrong, a sync paused on the session budget). Most are cards and the in
 not what makes it a notice. They do not all sit at the top: three lead the panel above the status rows, and three more
 sit inside the status block, below the conditional slot — `docs/architecture/qam-panel.md`'s Main section has the order.
 The **home** of a condition is the one page where it is acted on. A notice names the condition and jumps to its home;
-the action exists only there, never on the notice — with one exception today, the RetroArch input driver, whose **Fix**
-still applies in place behind a confirmation until Settings (#1816) gives it a home. A condition answered **once and for
-all** — the user picks between named outcomes, and answering ends the condition for good — has no page to return to, so
-its home is a modal opened from the notice; that modal _is_ the home, not a second exception to the rule. A condition
-with no home in the plugin stays a notice without a jump, with Dismiss where there is a sensible end to it. _Avoid_:
-banner (component names only), warning, alert.
+the action exists only there, never on the notice — with two exceptions today: the RetroArch input driver, whose **Fix**
+still applies in place behind a confirmation until Settings (#1816) gives it a home, and a **hosted session**'s card,
+which carries **Join** itself for fewer presses (ltsjoe/romm-tender#1 D5). A condition answered **once and for all** —
+the user picks between named outcomes, and answering ends the condition for good — has no page to return to, so its home
+is a modal opened from the notice; that modal _is_ the home, not a second exception to the rule. A condition with no
+home in the plugin stays a notice without a jump, with Dismiss where there is a sensible end to it. _Avoid_: banner
+(component names only), warning, alert.
+
+### Hosted session / host / guest (netplay)
+
+A **hosted session** is one game being played over the network: its **host** started it with **Host multiplayer**, and a
+**guest** joins it from the session's card on Main. Both run the game on their own device with the emulator's own
+netplay (RetroArch, or PPSSPP's ad hoc mode); nothing is streamed. A session exists for other players only while the
+host's RomM activity heartbeat is live and its **session note** parses; `docs/architecture/netplay.md` owns the detail.
+_Avoid_: lobby (libretro's public list of RetroArch hosts, which Tender only reads), room, stream.
+
+### Session note (netplay)
+
+The public RomM note titled `Tender multiplayer session` that a host keeps on the ROM while it hosts, carrying what a
+guest needs to connect: the host's addresses, the relay once known, the core, the password. It is **input from another
+user**, never trusted: every field is checked with a whole-value pattern before any of it can reach a launch command,
+and a note that fails a check is no note at all. _Avoid_: invite, link (nothing is clicked), ticket.
