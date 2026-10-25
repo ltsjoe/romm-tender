@@ -1186,3 +1186,76 @@ class TestExchangePairingCode:
         client.unauthenticated_post_json.side_effect = RommServerError("boom", status_code=500)
         with pytest.raises(RommServerError):
             api.exchange_pairing_code("ABCD2345")
+
+
+class TestActivity:
+    """RomM's activity feed (5.0.0+): the heartbeat a host keeps live and the list a guest reads."""
+
+    def test_heartbeat_posts_the_rom_and_device(self):
+        api, client = _make_api()
+        client.post_json.return_value = {"rom_id": 7, "device_id": "dev-1"}
+        result = api.send_activity_heartbeat(7, "dev-1")
+        client.post_json.assert_called_once_with("/api/activity/heartbeat", {"rom_id": 7, "device_id": "dev-1"})
+        assert result == {"rom_id": 7, "device_id": "dev-1"}
+
+    def test_clear_deletes_the_devices_heartbeat_with_the_id_encoded(self):
+        api, client = _make_api()
+        api.clear_activity_heartbeat("dev 1/x")
+        client.delete.assert_called_once_with("/api/activity/heartbeat?device_id=dev%201%2Fx")
+
+    def test_list_reads_every_live_entry(self):
+        api, client = _make_api()
+        client.request.return_value = [{"user_id": 2, "rom_id": 7}]
+        assert api.list_activity() == [{"user_id": 2, "rom_id": 7}]
+        client.request.assert_called_once_with("/api/activity")
+
+    def test_a_list_that_is_not_a_list_reads_as_none_live(self):
+        api, client = _make_api()
+        client.request.return_value = {"detail": "?"}
+        assert api.list_activity() == []
+
+    def test_a_forbidden_heartbeat_stays_a_forbidden_error(self):
+        api, client = _make_api()
+        client.post_json.side_effect = RommForbiddenError("forbidden")
+        with pytest.raises(RommForbiddenError):
+            api.send_activity_heartbeat(7, "dev-1")
+
+
+class TestRomNotes:
+    """A ROM's notes — where a host publishes what a guest needs to join."""
+
+    def test_list_reads_the_roms_notes(self):
+        api, client = _make_api()
+        client.request.return_value = [{"id": 3, "title": "t"}]
+        assert api.list_rom_notes(7) == [{"id": 3, "title": "t"}]
+        client.request.assert_called_once_with("/api/roms/7/notes")
+
+    def test_a_list_that_is_not_a_list_reads_as_no_notes(self):
+        api, client = _make_api()
+        client.request.return_value = None
+        assert api.list_rom_notes(7) == []
+
+    def test_create_posts_a_note(self):
+        api, client = _make_api()
+        client.post_json.return_value = {"id": 9}
+        assert api.create_rom_note(7, title="T", content="C", is_public=True) == {"id": 9}
+        client.post_json.assert_called_once_with(
+            "/api/roms/7/notes", {"title": "T", "content": "C", "is_public": True, "tags": []}
+        )
+
+    def test_update_puts_the_new_content(self):
+        api, client = _make_api()
+        client.put_json.return_value = {"id": 9}
+        api.update_rom_note(7, 9, content="C2")
+        client.put_json.assert_called_once_with("/api/roms/7/notes/9", {"content": "C2"})
+
+    def test_delete_deletes_the_note(self):
+        api, client = _make_api()
+        api.delete_rom_note(7, 9)
+        client.delete.assert_called_once_with("/api/roms/7/notes/9")
+
+    def test_an_entity_404_on_delete_stays_not_found(self):
+        api, client = _make_api()
+        client.delete.side_effect = RommNotFoundError("Note not found or not owned by user")
+        with pytest.raises(RommNotFoundError):
+            api.delete_rom_note(7, 9)

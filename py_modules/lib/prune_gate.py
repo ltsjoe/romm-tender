@@ -18,6 +18,7 @@ _LEASE_SECONDS = 300.0
 # leaking an internal token into the UI.
 _HOLDER_NAMES = {
     "launch_reconfirm": "checking a game's launch settings",
+    "netplay_launch": "starting a multiplayer game",
     "installed_reconcile": "checking which games are installed",
     "sgdb_artwork": "downloading artwork",
     "version_switch": "switching versions",

@@ -133,12 +133,34 @@ def resolve_emulator_invocation(rom: dict[str, Any], emulator: EmulatorInvocatio
         args = _direct_launch_args(emulator.command)
         base = f"flatpak run --command={emulator.launcher} {RETRODECK_APP_ID}"
         return f"{base} {args}" if args else base
+    return invocation_with_launch_args(emulator, "") or RETRODECK_INVOCATION
+
+
+def invocation_with_launch_args(emulator: EmulatorInvocation, args: str) -> str | None:
+    """Render the ``-e`` invocation for *emulator* with *args* placed before ``%ROM%``.
+
+    The one rendering of the libretro and standalone ``-e`` forms, so a launch
+    that adds emulator flags (a multiplayer session's) bakes the same command a
+    shortcut does, plus the flags. *args* goes inside the double-quoted ``-e``
+    string that ``run_game.sh`` hands to ``eval``, so the caller owns making it
+    shell-inert. ``None`` for a ``direct`` launch, which bypasses ``run_game.sh``,
+    and for a half-resolved invocation.
+    """
     if emulator.kind == "standalone" and emulator.command:
-        return f'{RETRODECK_INVOCATION} -e "{emulator.command}"'
+        command = emulator.command
+        if args and command.endswith("%ROM%"):
+            command = f"{command[: -len('%ROM%')].rstrip()} {args} %ROM%"
+        elif args:
+            return None
+        return f'{RETRODECK_INVOCATION} -e "{command}"'
     if emulator.kind == "libretro" and emulator.core_so:
         # The bare core name + ".so" forms the on-disk RetroArch core path -L expects.
-        return f'{RETRODECK_INVOCATION} -e "%EMULATOR_RETROARCH% -L {_RETROARCH_CORES_DIR}/{emulator.core_so}.so %ROM%"'
-    return RETRODECK_INVOCATION
+        middle = f"{args} " if args else ""
+        return (
+            f'{RETRODECK_INVOCATION} -e "%EMULATOR_RETROARCH% -L {_RETROARCH_CORES_DIR}/{emulator.core_so}.so '
+            f'{middle}%ROM%"'
+        )
+    return None
 
 
 def _direct_launch_args(command: str) -> str:

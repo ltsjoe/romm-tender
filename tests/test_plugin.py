@@ -1004,6 +1004,15 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "get_achievements",
     "get_achievement_progress",
     "sync_achievements_after_session",
+    # Multiplayer (netplay): the two reads and the two session ends. A read
+    # touches no RetroDECK path, and an end has to stay reachable whatever the
+    # migration marker says, so a session can always be taken down. The two
+    # callables that write a session's config into RetroDECK's tree and answer
+    # a launch command (start_host_session, prepare_join_session) ARE gated.
+    "get_netplay_capability",
+    "list_hosted_sessions",
+    "end_host_session",
+    "end_join_session",
 }
 
 
@@ -1157,6 +1166,7 @@ class TestMainStartupOrdering:
             "session_lifecycle_service": MagicMock(),
             "game_process_service": MagicMock(),
             "relaunch_options_resolver": MagicMock(),
+            "netplay_service": MagicMock(),
         }
 
         bootstrap_result = BootstrapResult(
@@ -1188,6 +1198,10 @@ class TestMainStartupOrdering:
                 prune_artifacts=MagicMock(),
                 steam_recovery=MagicMock(),
                 data_location_store=MagicMock(),
+                retroarch_cores=MagicMock(),
+                netplay_config_store=MagicMock(),
+                local_network=MagicMock(),
+                lobby_rooms=MagicMock(),
             ),
             stores=StateBundle(
                 settings={},
@@ -1234,6 +1248,9 @@ class TestMainStartupOrdering:
         assert "detect_retrodeck_path_change" in call_order
         assert "prune_stale_installed_roms" in call_order
         assert call_order.index("detect_retrodeck_path_change") < call_order.index("prune_stale_installed_roms")
+        # A multiplayer note a crashed session left behind is cleaned up in the
+        # background, so a start never waits on RomM for it.
+        wired_services["netplay_service"].start_leftover_cleanup.assert_called_once_with()
 
 
 class TestCancelCallablesNotBlockedByMigration:

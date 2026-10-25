@@ -25,6 +25,10 @@ a pytest ``tmp_path`` and wires the **real** services via the real
   ``RommHttpAdapter`` (``resolve_system``, settings binding) stays real —
   it is a pure settings/file read with no network on the read paths.
 * ``emit`` → an ``AsyncMock`` so tests assert emissions.
+* the multiplayer edges — the RetroArch core reader (the real one reads the
+  host's RetroDECK cores), this machine's network and libretro's lobby — are
+  in-memory fakes; the session config files are written for real under
+  ``tmp_path``.
 
 The SQLite database, the file stores, and the settings file all write
 into ``tmp_path``; that is intended and isolated per test (pytest hands
@@ -47,8 +51,11 @@ from bootstrap import (
     wire_services,
 )
 from fakes.fake_game_process_control import FakeGameProcessControlAdapter
+from fakes.fake_local_network import FakeLocalNetworkReader
+from fakes.fake_netplay_config_store import FakeLobbyRooms
 from fakes.fake_renderer_gc import FakeRendererGc
 from fakes.fake_renderer_rss import FakeRendererRss
+from fakes.fake_retroarch_core_info import FakeRetroArchCoreInfoReader
 from fakes.fake_romm_api import FakeRommApi
 from fakes.fake_save_location_reader import FakeSaveLocationReader
 from fakes.fake_steamgrid_db_api import FakeSteamGridDbApi
@@ -94,6 +101,7 @@ _BOUND_SERVICE_ATTRS = {
     "_session_lifecycle_service": "session_lifecycle_service",
     "_game_process_service": "game_process_service",
     "_relaunch_options_resolver": "relaunch_options_resolver",
+    "_netplay_service": "netplay_service",
 }
 
 
@@ -133,6 +141,11 @@ class ContractHarness:
     # could not finish is still in Decky's directories.
     settings_dir: str
     data_dir: str
+    # The multiplayer edges: which cores this machine has and which are
+    # deterministic, its network, and libretro's lobby.
+    retroarch_cores: FakeRetroArchCoreInfoReader
+    network: FakeLocalNetworkReader
+    lobby: FakeLobbyRooms
 
 
 def _single_attempt_pass_through(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -203,6 +216,9 @@ def build_contract_harness(tmp_path: Any) -> ContractHarness:
     # refusal, which is exactly what these tests are not about. What the fake
     # states is the plain per-game file set; that the real adapter refuses on a
     # machine it cannot read is pinned in ``tests/adapters/test_atlas_saves.py``.
+    fake_cores = FakeRetroArchCoreInfoReader()
+    fake_network = FakeLocalNetworkReader()
+    fake_lobby = FakeLobbyRooms()
     patched_adapters = dataclasses.replace(
         result.adapters,
         romm_api=fake_romm,
@@ -211,6 +227,9 @@ def build_contract_harness(tmp_path: Any) -> ContractHarness:
         renderer_gc=FakeRendererGc(),
         game_process=fake_game_process,
         save_locations=FakeSaveLocationReader(),
+        retroarch_cores=fake_cores,
+        local_network=fake_network,
+        lobby_rooms=fake_lobby,
     )
 
     # Deterministic time/uuid/sleep seams so timestamped responses assert cleanly.
@@ -275,4 +294,7 @@ def build_contract_harness(tmp_path: Any) -> ContractHarness:
         game_process=fake_game_process,
         settings_dir=result.locations.settings_dir,
         data_dir=result.locations.data_dir,
+        retroarch_cores=fake_cores,
+        network=fake_network,
+        lobby=fake_lobby,
     )

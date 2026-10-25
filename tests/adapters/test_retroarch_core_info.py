@@ -248,3 +248,35 @@ class TestOsErrorHandling:
             assert adapter.get_corename("snes9x_libretro") == "FromSystem"
 
         assert any("Failed to read" in rec.message for rec in caplog.records)
+
+
+class TestNetplayReads:
+    """What a multiplayer session asks of a core: its savestate features, and whether it is installed."""
+
+    def _write_info(self, tmp_path: Path, name: str, text: str) -> None:
+        cores = _user_cores_dir(tmp_path)
+        cores.mkdir(parents=True, exist_ok=True)
+        (cores / f"{name}.info").write_text(text, encoding="utf-8")
+
+    def test_savestate_features_are_read_from_the_info_file(self, tmp_path):
+        self._write_info(tmp_path, "snes9x_libretro", _SNES9X_INFO + 'savestate_features = "deterministic"\n')
+        assert _make_adapter(tmp_path).savestate_features("snes9x_libretro") == "deterministic"
+
+    def test_a_core_without_the_key_has_none(self, tmp_path):
+        self._write_info(tmp_path, "snes9x_libretro", _SNES9X_INFO)
+        assert _make_adapter(tmp_path).savestate_features("snes9x_libretro") is None
+
+    def test_a_missing_info_file_has_none(self, tmp_path):
+        assert _make_adapter(tmp_path).savestate_features("snes9x_libretro") is None
+
+    def test_a_core_is_installed_where_retrodeck_launches_it_from(self, tmp_path):
+        cores = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retroarch" / "cores"
+        cores.mkdir(parents=True)
+        (cores / "snes9x_libretro.so").write_bytes(b"\x7fELF")
+        adapter = _make_adapter(tmp_path)
+        assert adapter.core_installed("snes9x_libretro") is True
+        assert adapter.core_installed("mgba_libretro") is False
+
+    @pytest.mark.parametrize("name", ["../x_libretro", "x/../../y_libretro", ""])
+    def test_a_name_that_is_not_a_core_is_never_installed(self, tmp_path, name):
+        assert _make_adapter(tmp_path).core_installed(name) is False

@@ -5,14 +5,15 @@ implements every method declared on the per-domain Protocols in
 ``services.protocols.transport`` (``RommLibraryApi``, ``RommSyncApi``,
 ``RommConnectionApi``, ``RommAchievementsApi``, ``RommFirmwareApi``,
 ``RommPlaytimeApi``, ``RommDeviceApi``, ``RommPlatformReader``,
-``RommRomReader``, ``RommSaveApi``, ``RommTokenApi``, ``RommVersion``) so a
+``RommRomReader``, ``RommSaveApi``, ``RommTokenApi``, ``RommVersion``,
+``RommActivityApi``, ``RommNoteApi``) so a
 single instance satisfies any of them via duck typing.
 
 Seed in-memory state directly on the public attributes
 (``platforms`` / ``roms`` / ``firmware_files`` / ``collections`` /
 ``virtual_collections`` / ``smart_collections`` / ``play_sessions`` / ``saves`` /
-``devices``); construct without arguments for tests that only care that
-the surface is callable.
+``devices`` / ``activity`` / ``rom_notes``); construct without arguments for
+tests that only care that the surface is callable.
 
 Failure injection mirrors ``FakeSaveApi``:
 
@@ -42,7 +43,7 @@ from fakes._romm_save_semantics import (
     tag_filename,
     with_absent_device_placeholder,
 )
-from lib.errors import RommSyncDisabledError, RommUnprocessableEntityError
+from lib.errors import RommNotFoundError, RommServerError, RommSyncDisabledError, RommUnprocessableEntityError
 from lib.romm_paging import LIST_PAGE_SIZE
 
 if TYPE_CHECKING:
@@ -98,6 +99,15 @@ class FakeRommApi:
         self.mangle_batch_422_detail: bool = False
         self.saves: dict[int, dict[str, Any]] = {}
         self.devices: list[dict[str, Any]] = []
+        # Live activity entries (RomM 5.0.0+), in RomM's own ``ActivityEntrySchema``
+        # shape. Seed other users' entries directly; a heartbeat upserts the
+        # signed-in user's own entry keyed by its device id.
+        self.activity: list[dict[str, Any]] = []
+        # ROM notes keyed by rom_id, each a ``UserNoteSchema``-shaped dict. Seed
+        # other users' notes directly; ``list_rom_notes`` returns the signed-in
+        # user's own notes plus every public one, as RomM does.
+        self.rom_notes: dict[int, list[dict[str, Any]]] = {}
+        self._next_note_id = 500
         self.current_user: dict[str, Any] = {"id": 1, "username": "tester"}
         self.heartbeat_response: dict[str, Any] = {"status": "ok"}
         self._version: str | None = None
@@ -176,6 +186,13 @@ class FakeRommApi:
         self.mint_client_token_side_effect: Exception | None = None
         self.delete_client_token_side_effect: Exception | None = None
         self.exchange_pairing_code_side_effect: Exception | None = None
+        self.send_activity_heartbeat_side_effect: Exception | None = None
+        self.clear_activity_heartbeat_side_effect: Exception | None = None
+        self.list_activity_side_effect: Exception | None = None
+        self.list_rom_notes_side_effect: Exception | None = None
+        self.create_rom_note_side_effect: Exception | None = None
+        self.update_rom_note_side_effect: Exception | None = None
+        self.delete_rom_note_side_effect: Exception | None = None
         # When set, ``negotiate_sync`` raises ``RommSyncDisabledError`` to model
         # RomM's per-device sync-disabled 400 (#1489), independent of the generic
         # ``_check_fail`` arming.
@@ -576,6 +593,96 @@ class FakeRommApi:
                 device.update({k: v for k, v in fields.items() if v is not None})
                 return dict(device)
         return {"id": device_id, **{k: v for k, v in fields.items() if v is not None}}
+
+    # ------------------------------------------------------------------
+    # RommActivityApi
+    # ------------------------------------------------------------------
+
+    def send_activity_heartbeat(self, rom_id: int, device_id: str) -> dict[str, Any]:
+        self._log("send_activity_heartbeat", (rom_id, device_id))
+        self._check_fail(self.send_activity_heartbeat_side_effect)
+        user_id = self.current_user.get("id")
+        for entry in self.activity:
+            if entry.get("user_id") == user_id and entry.get("device_id") == device_id:
+                entry["rom_id"] = rom_id
+                return dict(entry)
+        entry = {
+            "user_id": user_id,
+            "username": self.current_user.get("username", ""),
+            "rom_id": rom_id,
+            "rom_name": str((self.roms.get(rom_id) or {}).get("name", "")),
+            "device_id": device_id,
+            "device_type": "Tender",
+            "started_at": datetime.now(UTC).isoformat(),
+        }
+        self.activity.append(entry)
+        return dict(entry)
+
+    def clear_activity_heartbeat(self, device_id: str) -> None:
+        self._log("clear_activity_heartbeat", (device_id,))
+        self._check_fail(self.clear_activity_heartbeat_side_effect)
+        user_id = self.current_user.get("id")
+        self.activity = [
+            e for e in self.activity if not (e.get("user_id") == user_id and e.get("device_id") == device_id)
+        ]
+
+    def list_activity(self) -> list[dict[str, Any]]:
+        self._log("list_activity")
+        self._check_fail(self.list_activity_side_effect)
+        return [dict(e) for e in self.activity]
+
+    # ------------------------------------------------------------------
+    # RommNoteApi
+    # ------------------------------------------------------------------
+
+    def _own_note(self, rom_id: int, note_id: int) -> dict[str, Any]:
+        for note in self.rom_notes.get(rom_id, []):
+            if note.get("id") == note_id and note.get("user_id") == self.current_user.get("id"):
+                return note
+        raise RommNotFoundError("Note not found or not owned by user")
+
+    def list_rom_notes(self, rom_id: int) -> list[dict[str, Any]]:
+        self._log("list_rom_notes", (rom_id,))
+        self._check_fail(self.list_rom_notes_side_effect)
+        user_id = self.current_user.get("id")
+        return [dict(n) for n in self.rom_notes.get(rom_id, []) if n.get("user_id") == user_id or n.get("is_public")]
+
+    def create_rom_note(self, rom_id: int, *, title: str, content: str, is_public: bool) -> dict[str, Any]:
+        self._log("create_rom_note", (rom_id,), {"title": title, "content": content, "is_public": is_public})
+        self._check_fail(self.create_rom_note_side_effect)
+        user_id = self.current_user.get("id")
+        notes = self.rom_notes.setdefault(rom_id, [])
+        if any(n.get("user_id") == user_id and n.get("title") == title for n in notes):
+            # RomM's unique (rom, user, title) constraint surfaces as a 500.
+            raise RommServerError("duplicate note title", status_code=500)
+        now = datetime.now(UTC).isoformat()
+        note = {
+            "id": self._next_note_id,
+            "title": title,
+            "content": content,
+            "is_public": is_public,
+            "tags": [],
+            "created_at": now,
+            "updated_at": now,
+            "user_id": user_id,
+            "username": self.current_user.get("username", ""),
+        }
+        self._next_note_id += 1
+        notes.append(note)
+        return dict(note)
+
+    def update_rom_note(self, rom_id: int, note_id: int, *, content: str) -> dict[str, Any]:
+        self._log("update_rom_note", (rom_id, note_id), {"content": content})
+        self._check_fail(self.update_rom_note_side_effect)
+        note = self._own_note(rom_id, note_id)
+        note["content"] = content
+        return dict(note)
+
+    def delete_rom_note(self, rom_id: int, note_id: int) -> None:
+        self._log("delete_rom_note", (rom_id, note_id))
+        self._check_fail(self.delete_rom_note_side_effect)
+        note = self._own_note(rom_id, note_id)
+        self.rom_notes[rom_id].remove(note)
 
     # ------------------------------------------------------------------
     # RommSaveApi

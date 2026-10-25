@@ -246,3 +246,20 @@ class DownloadQueueCleanup(Protocol):
     def evict(self, rom_id: int) -> None: ...
 
     def clear(self) -> None: ...
+
+
+class LocalNetworkReader(Protocol):
+    """This machine's network addresses, and whether a host answers on a TCP port.
+
+    Services consume this Protocol instead of :mod:`socket` so a multiplayer
+    session's address list and reachability probe stay free of syscalls and
+    tests can pin both.
+    """
+
+    def ipv4_addresses(self) -> list[str]:
+        """Every interface's IPv4 address, loopback and public included."""
+        ...
+
+    def tcp_reachable(self, address: str, port: int, timeout: float) -> bool:
+        """Whether a TCP connection to *address*:*port* opens within *timeout* seconds."""
+        ...

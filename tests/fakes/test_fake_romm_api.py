@@ -10,12 +10,16 @@ from fakes.fake_romm_api import FakeRommApi
 
 if TYPE_CHECKING:
     from models.play_sessions import PlaySessionIngestEntry
+from lib.errors import RommNotFoundError, RommServerError
 from services.protocols.transport import (
     RommAchievementsApi,
+    RommActivityApi,
     RommConnectionApi,
     RommDeviceApi,
     RommFirmwareApi,
     RommLibraryApi,
+    RommNetplayApi,
+    RommNoteApi,
     RommPlatformReader,
     RommPlaytimeApi,
     RommRomReader,
@@ -227,6 +231,76 @@ class TestDeviceRegistration:
         assert api.list_devices()[0]["name"] == "deck"
 
 
+class TestActivity:
+    """The activity feed: heartbeats upsert the signed-in user's entry, a clear drops it."""
+
+    def test_a_heartbeat_makes_the_user_live_on_the_rom(self) -> None:
+        api = FakeRommApi()
+        api.send_activity_heartbeat(7, "device-1")
+        entries = api.list_activity()
+        assert [(e["user_id"], e["rom_id"], e["device_id"]) for e in entries] == [(1, 7, "device-1")]
+
+    def test_a_second_heartbeat_keeps_one_entry_and_its_start(self) -> None:
+        api = FakeRommApi()
+        first = api.send_activity_heartbeat(7, "device-1")
+        second = api.send_activity_heartbeat(7, "device-1")
+        assert len(api.list_activity()) == 1
+        assert first["started_at"] == second["started_at"]
+
+    def test_a_clear_drops_only_this_devices_entry(self) -> None:
+        api = FakeRommApi()
+        api.activity.append({"user_id": 2, "rom_id": 7, "device_id": "other"})
+        api.send_activity_heartbeat(7, "device-1")
+        api.clear_activity_heartbeat("device-1")
+        assert [e["device_id"] for e in api.list_activity()] == ["other"]
+
+    def test_side_effects_fire(self) -> None:
+        api = FakeRommApi()
+        api.send_activity_heartbeat_side_effect = RuntimeError("down")
+        with pytest.raises(RuntimeError):
+            api.send_activity_heartbeat(7, "device-1")
+
+
+class TestRomNotes:
+    """Notes: own and public ones are listed, and only the author may change one."""
+
+    def test_create_then_list(self) -> None:
+        api = FakeRommApi()
+        note = api.create_rom_note(7, title="T", content="C", is_public=True)
+        assert api.list_rom_notes(7) == [note]
+        assert note["user_id"] == 1 and note["username"] == "tester"
+
+    def test_another_users_private_note_is_not_listed(self) -> None:
+        api = FakeRommApi()
+        api.rom_notes[7] = [
+            {"id": 1, "user_id": 2, "title": "a", "content": "", "is_public": False},
+            {"id": 2, "user_id": 2, "title": "b", "content": "", "is_public": True},
+        ]
+        assert [n["id"] for n in api.list_rom_notes(7)] == [2]
+
+    def test_a_second_note_with_the_same_title_is_refused(self) -> None:
+        api = FakeRommApi()
+        api.create_rom_note(7, title="T", content="C", is_public=True)
+        with pytest.raises(RommServerError):
+            api.create_rom_note(7, title="T", content="D", is_public=True)
+
+    def test_update_and_delete_own_note(self) -> None:
+        api = FakeRommApi()
+        note = api.create_rom_note(7, title="T", content="C", is_public=True)
+        api.update_rom_note(7, note["id"], content="C2")
+        assert api.list_rom_notes(7)[0]["content"] == "C2"
+        api.delete_rom_note(7, note["id"])
+        assert api.list_rom_notes(7) == []
+
+    def test_another_users_note_is_not_found_to_change(self) -> None:
+        api = FakeRommApi()
+        api.rom_notes[7] = [{"id": 5, "user_id": 2, "title": "b", "content": "", "is_public": True}]
+        with pytest.raises(RommNotFoundError):
+            api.delete_rom_note(7, 5)
+        with pytest.raises(RommNotFoundError):
+            api.update_rom_note(7, 5, content="x")
+
+
 class TestClientTokens:
     """Mint/delete record calls and honour staged responses."""
 
@@ -276,6 +350,9 @@ class TestProtocolSatisfaction:
             RommLibraryApi,
             RommSyncApi,
             RommTokenApi,
+            RommActivityApi,
+            RommNoteApi,
+            RommNetplayApi,
         ],
     )
     def test_implements_every_protocol_member(self, protocol) -> None:

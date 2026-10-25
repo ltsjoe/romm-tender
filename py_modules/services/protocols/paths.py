@@ -303,13 +303,20 @@ class RetroArchConfigReader(Protocol):
 
 
 class RetroArchCoreInfoReader(Protocol):
-    """Object seam for RetroArch per-core ``.info`` reads.
+    """Object seam for what one RetroArch core is: its ``.info`` metadata and its install.
 
-    Held by ``main.py`` to bind ``get_corename`` as a callable
-    forwarded into service wiring. Distinct from
-    :class:`CoreNameProviderFn` (the call-shaped Protocol for the
-    bound method itself) — that one is what services receive; this
-    one is what ``main.py`` holds.
+    ``core_so`` is the bare core name including the ``_libretro`` suffix (e.g.
+    ``"snes9x_libretro"``). Every read answers ``None`` / ``False`` where it
+    cannot establish its answer rather than raising. The services that only want
+    ``corename`` receive the bound method as a :class:`CoreNameProviderFn`.
     """
 
     def get_corename(self, core_so: str) -> str | None: ...
+
+    def savestate_features(self, core_so: str) -> str | None:
+        """The core's ``savestate_features`` field — ``"deterministic"`` is the value netplay needs."""
+        ...
+
+    def core_installed(self, core_so: str) -> bool:
+        """Whether the core's ``.so`` is where a baked launch loads it from."""
+        ...

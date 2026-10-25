@@ -233,7 +233,25 @@ class DeviceRegistry:
                 "device_name": "",
                 "disabled": True,
             }
+        return await self.ensure_registered(
+            loop=loop, hostname_provider=hostname_provider, machine_id_provider=machine_id_provider
+        )
 
+    async def ensure_registered(
+        self,
+        *,
+        loop: asyncio.AbstractEventLoop,
+        hostname_provider: HostnameReader,
+        machine_id_provider: MachineIdReader,
+    ) -> dict[str, Any]:
+        """Ensure this device is registered with the RomM server, whatever save sync's switch says.
+
+        The registration :meth:`ensure_device_registered` performs, without its
+        save-sync gate: a multiplayer session sends RomM activity heartbeats
+        under the same device save sync would use, and a player without save
+        sync must still be able to host. It writes the device id and nothing
+        else — save sync stays exactly as switched. Same answer shape.
+        """
         # Probe the RomM version when it has not been observed yet. Device
         # registration is the entrypoint reached from background launchers
         # that never call test_connection first, so the version on the API

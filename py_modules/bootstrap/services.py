@@ -33,6 +33,7 @@ from services.legacy_install import LegacyInstallService, LegacyInstallServiceCo
 from services.library import LibraryService, LibraryServiceConfig
 from services.metadata import MetadataService, MetadataServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
+from services.netplay import NetplayService, NetplayServiceConfig
 from services.playtime import PlaytimeService, PlaytimeServiceConfig
 from services.prune import PruneService, PruneServiceConfig
 from services.relaunch_options_resolver import RelaunchOptionsResolver, RelaunchOptionsResolverConfig
@@ -612,6 +613,34 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         )
     )
 
+    # Multiplayer sessions found through RomM. The device it heartbeats under is
+    # save sync's own, registered through save sync's registry but without its
+    # switch; the launch it answers is baked through the same core and disc
+    # seams every other launch command is.
+    netplay_service = NetplayService(
+        config=NetplayServiceConfig(
+            romm_api=cfg.adapters.romm_api,
+            settings=cfg.stores.settings,
+            uow_factory=cfg.callbacks.uow_factory,
+            active_core=active_core_resolver,
+            core_info=cfg.adapters.core_info_provider,
+            resolve_system=cfg.adapters.http_adapter.resolve_system,
+            retroarch_cores=cfg.adapters.retroarch_cores,
+            launch_path=relaunch_options_resolver,
+            register_device=save_sync_service.ensure_device_identity,
+            save_dir_for_rom=save_sync_service.save_dir_for_rom,
+            config_store=cfg.adapters.netplay_config_store,
+            network=cfg.adapters.local_network,
+            lobby_rooms=cfg.adapters.lobby_rooms,
+            loop=cfg.runtime.loop,
+            logger=cfg.runtime.logger,
+            log_debug=cfg.callbacks.log_debug,
+            clock=cfg.runtime.clock,
+            sleeper=cfg.runtime.sleeper,
+            uuid_gen=cfg.runtime.uuid_gen,
+        ),
+    )
+
     return {
         "save_sync_service": save_sync_service,
         "playtime_service": playtime_service,
@@ -641,4 +670,5 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         "session_lifecycle_service": session_lifecycle_service,
         "game_process_service": game_process_service,
         "relaunch_options_resolver": relaunch_options_resolver,
+        "netplay_service": netplay_service,
     }

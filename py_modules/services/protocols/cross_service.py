@@ -691,6 +691,32 @@ class DeviceIdProvider(Protocol):
     def get_device_id(self) -> str | None: ...
 
 
+class DeviceRegistrationFn(Protocol):
+    """Register this machine as a RomM device, whatever save sync's switch says.
+
+    The composition root satisfies this with ``SaveService.ensure_device_identity``
+    (the ``DeviceRegistry``, the single owner of ``kv_config["device_id"]``).
+    NetplayService needs a device for RomM's activity heartbeat; registering one
+    leaves save sync switched as it was. Answers ``{success, device_id, …}`` or
+    the canonical failure shape.
+    """
+
+    async def __call__(self) -> dict[str, Any]: ...
+
+
+class RomSaveDirFn(Protocol):
+    """The folder an installed ROM's saves sit in, as save sync resolves it.
+
+    The composition root satisfies this with ``SaveService.save_dir_for_rom``.
+    NetplayService points a session that runs on another core than the game's
+    own at this folder, so the session reads and writes the game's usual save.
+    ``None`` for a ROM that is not installed. Reads RetroArch's config and the
+    core's ``.info``, so it is called outside any open Unit of Work.
+    """
+
+    def __call__(self, rom_id: int) -> str | None: ...
+
+
 class DeviceForgetFn(Protocol):
     """Server-device-id reset consumed by ConnectionService.
 

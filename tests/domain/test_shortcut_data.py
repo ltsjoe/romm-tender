@@ -8,6 +8,7 @@ from domain.shortcut_data import (
     EmulatorInvocation,
     build_launch_options,
     build_shortcuts_data,
+    invocation_with_launch_args,
     resolve_emulator_invocation,
     select_shortcuts_to_relocate,
 )
@@ -139,6 +140,35 @@ class TestResolveEmulatorInvocation:
         # B4 guard: a None core must never reach the f-string as the literal "None.so".
         assert "None.so" not in resolve_emulator_invocation({"id": 1}, None)
         assert "None" not in resolve_emulator_invocation({"id": 1}, None)
+
+
+class TestInvocationWithLaunchArgs:
+    """The ``-e`` rendering with extra emulator flags placed before ``%ROM%``."""
+
+    def test_without_args_it_is_the_shortcut_bake(self):
+        emulator = EmulatorInvocation.libretro("mgba_libretro", "mGBA")
+        assert invocation_with_launch_args(emulator, "") == resolve_emulator_invocation({"id": 1}, emulator)
+
+    def test_libretro_args_sit_between_the_core_and_the_rom(self):
+        emulator = EmulatorInvocation.libretro("mgba_libretro", "mGBA")
+        assert invocation_with_launch_args(emulator, "--host") == (
+            'flatpak run net.retrodeck.retrodeck -e "%EMULATOR_RETROARCH% -L '
+            '/var/config/retroarch/cores/mgba_libretro.so --host %ROM%"'
+        )
+
+    def test_standalone_args_sit_before_the_rom(self):
+        emulator = EmulatorInvocation.standalone("%EMULATOR_PPSSPP% %ROM%", "PPSSPP")
+        assert invocation_with_launch_args(emulator, "--appendconfig=/x.ini") == (
+            'flatpak run net.retrodeck.retrodeck -e "%EMULATOR_PPSSPP% --appendconfig=/x.ini %ROM%"'
+        )
+
+    def test_a_standalone_command_not_ending_in_the_rom_cannot_take_args(self):
+        emulator = EmulatorInvocation.standalone("%EMULATOR_X% %ROM% --late", "X")
+        assert invocation_with_launch_args(emulator, "--y") is None
+
+    def test_a_direct_launch_cannot_take_args(self):
+        emulator = EmulatorInvocation.direct("%EMULATOR_RPCS3% %ROM%", "/app/l.sh", "RPCS3")
+        assert invocation_with_launch_args(emulator, "--y") is None
 
 
 class TestBuildLaunchOptions:
