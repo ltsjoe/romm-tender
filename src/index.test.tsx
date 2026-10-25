@@ -25,7 +25,12 @@ import {
   getMetadataCachePage,
   releasePruneConflictLease,
   waitForPruneRelease,
+  endHostSession,
+  getRomRelaunchOptions,
+  listHostedSessions,
 } from "./api/backend";
+import { getNetplayLaunch, resetNetplayLaunchForTests } from "./utils/netplayLaunch";
+import { resetHostedSessionsForTests } from "./utils/hostedSessions";
 import { getSettingsResetState, setSettingsResetState } from "./utils/settingsResetStore";
 import { getDownloadState, setDownloads } from "./utils/downloadStore";
 import { getSyncProgress, setSyncProgress } from "./utils/syncProgress";
@@ -63,6 +68,7 @@ vi.mock("./utils/launchInterceptor", () => ({
 vi.mock("./utils/sessionManager", () => ({
   initSessionManager: vi.fn().mockResolvedValue(undefined),
   destroySessionManager: vi.fn(),
+  isSessionActive: vi.fn(() => false),
 }));
 
 const handlePruneAction = vi.fn().mockResolvedValue(undefined);
@@ -178,6 +184,55 @@ beforeEach(() => {
   // appStore, so default them to no-ops here.
   vi.stubGlobal("SteamClient", { Apps: {} });
   vi.stubGlobal("appStore", { GetAppOverviewByAppID: () => null, allApps: [] });
+});
+
+describe("index.tsx — multiplayer at plugin load (#1)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    resetNetplayLaunchForTests();
+    resetHostedSessionsForTests();
+    setLaunchOptionsConfirmed.mockClear();
+    vi.mocked(endHostSession).mockReset().mockResolvedValue({ success: true, note_removed: true });
+    vi.mocked(listHostedSessions).mockReset().mockResolvedValue({ success: true, sessions: [] });
+  });
+
+  it("ends a netplay launch the previous frontend left once its game is gone, and puts the normal command back", async () => {
+    localStorage.setItem("romm-tender:netplay-launch", JSON.stringify({ v: 1, appId: 100, romId: 42, role: "host" }));
+    vi.mocked(getRomRelaunchOptions).mockResolvedValue({
+      success: true,
+      app_id: 100,
+      launch_options: 'flatpak run net.retrodeck.retrodeck "/roms/psx/game.chd"',
+      prune_lease_token: "launch_reconfirm:1",
+    });
+
+    const plugin = pluginFactory();
+    await waitFor(() => expect(getNetplayLaunch()).toBeNull());
+
+    expect(endHostSession).toHaveBeenCalledTimes(1);
+    expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(
+      100,
+      'flatpak run net.retrodeck.retrodeck "/roms/psx/game.chd"',
+    );
+    expect(localStorage.getItem("romm-tender:netplay-launch")).toBeNull();
+    plugin.onDismount();
+  });
+
+  it("polls for hosted sessions from load, every 30 seconds, until dismount", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const plugin = pluginFactory();
+      expect(listHostedSessions).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(listHostedSessions).toHaveBeenCalledTimes(2);
+
+      plugin.onDismount();
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(listHostedSessions).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("index.tsx — launcher relocation at plugin load", () => {

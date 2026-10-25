@@ -9,6 +9,7 @@ import {
   planAdoption,
   ADOPTION_POLL_MAX_MS,
 } from "./sessionManager";
+import { getNetplayLaunch, recordNetplayLaunch, resetNetplayLaunchForTests } from "./netplayLaunch";
 
 // sessionManager talks to the backend callable surface and the migration
 // stores. Mock both so the test observes only what `handleGameStop` forwards
@@ -20,6 +21,13 @@ vi.mock("../api/backend", () => ({
   logInfo: vi.fn(),
   logError: vi.fn(),
   debugLog: vi.fn(),
+  // A netplay app's stop ends its session and puts the normal command back
+  // through the shared re-confirm (`./netplayLaunch`).
+  endHostSession: vi.fn(),
+  endJoinSession: vi.fn(),
+  getRomRelaunchOptions: vi.fn(),
+  releasePruneConflictLease: vi.fn(),
+  renewPruneConflictLease: vi.fn(),
 }));
 
 vi.mock("./migrationStore", () => ({ setMigrationStatus: vi.fn() }));
@@ -1468,5 +1476,79 @@ describe("sessionManager stop scoping (#1621)", () => {
 
     await stopApp(lifetime, APP_ID);
     expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
+  });
+});
+
+describe("sessionManager — the end of a netplay launch", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    localStorage.clear();
+    resetNetplayLaunchForTests();
+    stubLifecycleSteamClient();
+    vi.mocked(backend.getAppIdRomIdMap).mockResolvedValue({ [String(APP_ID)]: ROM_ID });
+    vi.mocked(backend.finalizeGameSession).mockResolvedValue({ ...IDLE_FINALIZE });
+    vi.mocked(backend.endHostSession).mockResolvedValue({ success: true, note_removed: true });
+    vi.mocked(backend.endJoinSession).mockResolvedValue({ success: true });
+    vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    destroySessionManager();
+    vi.useRealTimers();
+  });
+
+  it("ends the hosted session when its game exits, and still runs the post-exit sync", async () => {
+    await initDrainingAdoptionPoll();
+    const lifetime = captureLifetimeCb();
+    recordNetplayLaunch({ appId: APP_ID, romId: ROM_ID, role: "host" });
+
+    await startGame(lifetime);
+    await stopGame(lifetime);
+
+    expect(backend.endHostSession).toHaveBeenCalledTimes(1);
+    expect(backend.getRomRelaunchOptions).toHaveBeenCalledWith(ROM_ID);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
+    expect(getNetplayLaunch()).toBeNull();
+  });
+
+  it("ends a joined session when its game exits", async () => {
+    await initDrainingAdoptionPoll();
+    const lifetime = captureLifetimeCb();
+    recordNetplayLaunch({ appId: APP_ID, romId: ROM_ID, role: "guest" });
+
+    await startGame(lifetime);
+    await stopGame(lifetime);
+
+    expect(backend.endJoinSession).toHaveBeenCalledTimes(1);
+    expect(backend.endHostSession).not.toHaveBeenCalled();
+  });
+
+  it("leaves a netplay launch alone when another app exits", async () => {
+    await initDrainingAdoptionPoll();
+    const lifetime = captureLifetimeCb();
+    recordNetplayLaunch({ appId: APP_ID, romId: ROM_ID, role: "host" });
+
+    await startGame(lifetime);
+    await stopApp(lifetime, UNRELATED_APP_ID);
+
+    expect(backend.endHostSession).not.toHaveBeenCalled();
+    expect(getNetplayLaunch()).toEqual({ appId: APP_ID, romId: ROM_ID, role: "host" });
+  });
+
+  it("ends the session even where the exit opened no play session", async () => {
+    // A map that missed the app at its start leaves the session manager with no
+    // session to finalize; the netplay launch must end all the same.
+    vi.mocked(backend.getAppIdRomIdMap).mockResolvedValue({});
+    await initDrainingAdoptionPoll();
+    const lifetime = captureLifetimeCb();
+    recordNetplayLaunch({ appId: APP_ID, romId: ROM_ID, role: "host" });
+
+    await startGame(lifetime);
+    await stopGame(lifetime);
+
+    expect(backend.finalizeGameSession).not.toHaveBeenCalled();
+    expect(backend.endHostSession).toHaveBeenCalledTimes(1);
   });
 });

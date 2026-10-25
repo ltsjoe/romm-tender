@@ -128,7 +128,7 @@ async function checkCoreChangeWatcher(romId: number, prompts: LaunchPrompts): Pr
   );
 }
 
-/** Pre-launch sync hard timeout — mirrors the Play button's `runPreLaunchSync`. */
+/** Pre-launch sync hard timeout — mirrors the launch funnel's `runPreLaunchSync` (`launchFunnel.ts`). */
 const PRE_LAUNCH_SYNC_TIMEOUT_MS = 15000;
 
 /**

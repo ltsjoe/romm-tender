@@ -15,6 +15,7 @@ import { pluralize } from "../utils/pluralize";
 import { getSyncProgress, setSyncProgress as setStoredSyncProgress } from "../utils/syncProgress";
 import { useSyncRunView } from "../utils/syncRunView";
 import { useDownloads } from "../utils/downloadStore";
+import { useHostedSessions } from "../utils/hostedSessions";
 import { usePendingPreview, getPendingPreviewSnapshot, refreshPendingPreview } from "../utils/pendingPreviewStore";
 import { previewSecondsLeft } from "../utils/previewState";
 import { refreshSyncStats, refreshSyncStatsAfterChange, useSyncStats } from "../utils/syncStatsStore";
@@ -29,6 +30,7 @@ import { retroDeckBanner, type RetroDeckBanner } from "../utils/retrodeckHealth"
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
 import { WarningCard } from "./WarningCard";
 import { DownloadProgressRow } from "./DownloadProgressRow";
+import { HostedSessionCard } from "./HostedSessionCard";
 import { MigrationBlockedPage } from "./MigrationBlockedPage";
 import { SettingsResetBanner } from "./SettingsResetBanner";
 import { LegacyInstallNotice } from "./LegacyInstallBanner";
@@ -186,9 +188,10 @@ function previewCountsLine(preview: SyncPreview): string {
 }
 
 /**
- * Thin horizontal rule dividing the panel's blocks (status | downloads | menu).
- * Those three carry no section title, so a rule is the only thing marking where
- * one ends and the next begins. (The two notice sections above them are titled.)
+ * Thin horizontal rule dividing the panel's blocks (status | hosted sessions |
+ * downloads | menu). Those carry no section title, so a rule is the only thing
+ * marking where one ends and the next begins. (The two notice sections above
+ * them are titled.)
  */
 const BlockSeparator: FC = () => (
   <PanelSectionRow>
@@ -366,6 +369,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const playtimeScope = usePlaytimeScopeState();
   const saveSortMigration = useSaveSortMigrationState();
   const downloads = useDownloads();
+  const hostedSessions = useHostedSessions();
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showTransientStatus = (text: string, tone: StatusTone = "neutral") => {
@@ -796,6 +800,17 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         <DataLocationNotice />
         <BlockSeparator />
       </PanelSection>
+
+      {/* Multiplayer sessions other users host, one card each. Join on a card is
+          the one action Main holds itself rather than a door to its home. */}
+      {hostedSessions.length > 0 && (
+        <PanelSection>
+          {hostedSessions.map((session) => (
+            <HostedSessionCard key={session.key} session={session} />
+          ))}
+          <BlockSeparator />
+        </PanelSection>
+      )}
 
       {hasDownloads && (
         <PanelSection>

@@ -1,6 +1,7 @@
 /**
  * Session manager — detects game start/stop for RomM shortcuts and triggers
- * save sync + playtime tracking via backend callables.
+ * save sync + playtime tracking via backend callables, and ends a netplay
+ * launch when its game stops.
  *
  * Uses SteamClient.GameSessions.RegisterForAppLifetimeNotifications to detect
  * game lifecycle events — the notification's own `unAppID` identifies the app on
@@ -17,6 +18,7 @@ import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 import { detach } from "./detach";
 import { readRunningApps, type RunningAppsReading } from "./runningApps";
 import { delay } from "./pacedOps";
+import { endNetplayLaunch, isNetplayLaunchApp } from "./netplayLaunch";
 
 // Active session tracking — ONE ENTRY PER RUNNING APP (#1624). Two RomM games at
 // once each hold their own entry, so a second start no longer displaces the
@@ -250,6 +252,13 @@ async function handleGameStart(appId: number): Promise<void> {
  * file open, capturing a half-written file.
  */
 async function handleGameStop(stoppedAppId: number): Promise<void> {
+  // Ahead of the session lookup, because a netplay launch must end even where
+  // its start opened no play session. Not awaited: the post-exit sync below has
+  // nothing to wait for in RomM's note or the restored launch command.
+  if (isNetplayLaunchApp(stoppedAppId)) {
+    endNetplayLaunch(stoppedAppId).catch((e: unknown) => logError(`Failed to end the netplay launch: ${e}`));
+  }
+
   const session = activeSessions.get(stoppedAppId);
   if (!session) {
     detach(debugLog(`Session stop ignored: appId=${stoppedAppId} opened no session`));
